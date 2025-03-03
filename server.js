@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const { Types: { ObjectId } } = mongoose;
-
+const ChatQueue = require('./utils/chatQueue');
 const authRoutes = require('./routes/authRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const { connectDB } = require('./config/db');
@@ -90,32 +90,50 @@ io.on('connection', (socket) => {
   // Matchmaking System
   socket.on('start-search', async ({ userId }) => {
     try {
-      const userData = activeUsers.get(userId);
-      if (!userData) {
-        console.log(`User data not found for userId: ${userId}`);
-        return;
-      }
+      const user = await User.findById(userId);
+      if (!user) return;
   
-      console.log(`User ${userId} started searching`);
-      activeUsers.set(userId, { ...userData, status: 'searching' });
-      await User.findByIdAndUpdate(userId, { chatStatus: 'searching' });
-      
-      const match = await findMatch(userId, userData);
-      if (match) {
-        console.log(`Match found: ${match.id}`);
-        const { chat, isNew } = await createChatSession(userId, match.id, userData.chatPreference);
-        
-        io.to(userData.socketId).to(match.socketId).emit('match-found', {
-          chatId: chat._id,
-          participants: chat.participants,
-          isNew
+      // Add user to chat queue
+      ChatQueue.addUser(userId.toString(), {
+        interests: user.interests.map(i => i.toLowerCase()),
+        chatPreference: user.chatPreference
+      });
+  
+      // Periodically check for matches every 5 seconds
+      const matchInterval = setInterval(async () => {
+        const matchId = ChatQueue.findBestMatch(userId.toString(), {
+          interests: user.interests.map(i => i.toLowerCase()),
+          chatPreference: user.chatPreference
         });
-      } else {
-        console.log('No match found');
-      }
+  
+        if (matchId) {
+          clearInterval(matchInterval);
+          ChatQueue.removeUser(userId.toString());
+          ChatQueue.removeUser(matchId);
+  
+          // Create chat session
+          const { chat, isNew } = await createChatSession(userId, matchId, user.chatPreference);
+          
+          // Notify both users
+          io.to(activeUsers.get(userId)?.socketId).emit('match-found', { 
+            chatId: chat._id, 
+            user: chat.participants.find(p => p._id !== userId) 
+          });
+          io.to(activeUsers.get(matchId)?.socketId).emit('match-found', { 
+            chatId: chat._id, 
+            user: chat.participants.find(p => p._id !== matchId) 
+          });
+        }
+      }, 5000);
+  
+      // Handle disconnect during search
+      socket.on('disconnect', () => {
+        clearInterval(matchInterval);
+        ChatQueue.removeUser(userId.toString());
+      });
+  
     } catch (error) {
       console.error('Matchmaking error:', error);
-      socket.emit('match-error', { message: 'Failed to find match' });
     }
   });
 
