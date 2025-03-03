@@ -13,6 +13,8 @@ const postRoutes = require('./routes/postRoutes');
 const User = require('./models/userModel');
 const Chat = require('./models/chatModel');
 const { handleMessage, createChatSession } = require('./controllers/chatController');
+const matchmakingQueue = new Map();
+
 
 // Load environment variables
 dotenv.config();
@@ -93,49 +95,52 @@ io.on('connection', (socket) => {
       const user = await User.findById(userId);
       if (!user) return;
   
-      // Add user to chat queue
-      ChatQueue.addUser(userId.toString(), {
+      // Add user to queue
+      matchmakingQueue.set(userId.toString(), {
+        socketId: socket.id,
         interests: user.interests.map(i => i.toLowerCase()),
         chatPreference: user.chatPreference
       });
   
-      // Periodically check for matches every 5 seconds
-      const matchInterval = setInterval(async () => {
-        const matchId = ChatQueue.findBestMatch(userId.toString(), {
-          interests: user.interests.map(i => i.toLowerCase()),
-          chatPreference: user.chatPreference
+      // Immediate match attempt
+      const match = Array.from(matchmakingQueue.entries())
+        .find(([id, data]) => 
+          id !== userId.toString() &&
+          data.chatPreference === user.chatPreference &&
+          data.interests.some(i => user.interests.includes(i))
+        );
+  
+      if (match) {
+        const [matchId, matchData] = match;
+        
+        // Create chat session
+        const { chat } = await createChatSession(userId, matchId, user.chatPreference);
+        
+        // Notify both users
+        io.to(socket.id).emit('match-found', { 
+          chatId: chat._id, 
+          user: matchData 
+        });
+        io.to(matchData.socketId).emit('match-found', { 
+          chatId: chat._id, 
+          user: { 
+            id: user._id, 
+            username: user.username, 
+            interests: user.interests 
+          }
         });
   
-        if (matchId) {
-          clearInterval(matchInterval);
-          ChatQueue.removeUser(userId.toString());
-          ChatQueue.removeUser(matchId);
-  
-          // Create chat session
-          const { chat, isNew } = await createChatSession(userId, matchId, user.chatPreference);
-          
-          // Notify both users
-          io.to(activeUsers.get(userId)?.socketId).emit('match-found', { 
-            chatId: chat._id, 
-            user: chat.participants.find(p => p._id !== userId) 
-          });
-          io.to(activeUsers.get(matchId)?.socketId).emit('match-found', { 
-            chatId: chat._id, 
-            user: chat.participants.find(p => p._id !== matchId) 
-          });
-        }
-      }, 5000);
-  
-      // Handle disconnect during search
-      socket.on('disconnect', () => {
-        clearInterval(matchInterval);
-        ChatQueue.removeUser(userId.toString());
-      });
+        // Remove from queue
+        matchmakingQueue.delete(userId.toString());
+        matchmakingQueue.delete(matchId);
+      }
   
     } catch (error) {
       console.error('Matchmaking error:', error);
+      socket.emit('match-error', { message: 'Failed to find match' });
     }
   });
+  
 
   // Message Handling
   socket.on('send-message', async ({ chatId, senderId, content }) => {
@@ -175,30 +180,32 @@ io.on('connection', (socket) => {
 // Matchmaking Algorithm
 async function findMatch(userId, userData) {
   console.log(`Finding match for user: ${userId}`);
-  console.log(`User interests:`, userData.interests);
-
+  
+  // Normalize interests to lowercase
+  const userInterests = userData.interests.map(interest => interest.toLowerCase());
+  
+  // Array to store potential matches
   const potentialMatches = [];
   
   for (const [id, data] of activeUsers.entries()) {
-    if (id !== userId && 
-        data.status === 'searching' &&
-        data.chatPreference === userData.chatPreference) {
+    if (id !== userId && data.status === 'searching') {
+      // Normalize potential match's interests
+      const matchInterests = data.interests.map(interest => interest.toLowerCase());
       
-      const commonInterests = data.interests.filter(interest => 
-        userData.interests.includes(interest)
+      // Check for at least one common interest
+      const hasCommonInterest = matchInterests.some(interest => 
+        userInterests.includes(interest)
       );
 
-      console.log(`Checking match with user ${id}`);
-      console.log(`Their interests:`, data.interests);
-      console.log(`Common interests:`, commonInterests);
-
-      if (commonInterests.length > 0) {
+      // Check if chat preferences match
+      if (hasCommonInterest && data.chatPreference === userData.chatPreference) {
         console.log(`Potential match found: ${id}`);
         potentialMatches.push({ id, ...data });
       }
     }
   }
 
+  // If no matches found, return null
   if (potentialMatches.length === 0) {
     console.log('No potential matches found');
     return null;
@@ -208,6 +215,7 @@ async function findMatch(userId, userData) {
   const match = potentialMatches[Math.floor(Math.random() * potentialMatches.length)];
   console.log(`Selected match: ${match.id}`);
 
+  // Update status of both users to 'in_chat'
   activeUsers.set(match.id, { ...match, status: 'in_chat' });
   activeUsers.set(userId, { ...userData, status: 'in_chat' });
 
