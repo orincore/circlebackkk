@@ -65,6 +65,21 @@ exports.getChatById = async (req, res) => {
   }
 };
 
+exports.handleMessage = async ({ chatId, senderId, content }) => {
+  try {
+    const newMessage = await Message.create({ chat: chatId, sender: senderId, content });
+    await Chat.findByIdAndUpdate(chatId, { lastMessage: newMessage._id });
+    
+    // Return populated message with sender details
+    return {
+      success: true,
+      message: await Message.populate(newMessage, { path: 'sender', select: 'username' })
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
 // Get messages for a chat with read receipts
 exports.getChatMessages = async (req, res) => {
   try {
