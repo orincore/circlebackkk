@@ -3,7 +3,7 @@ const router = express.Router();
 const { 
   getChats, 
   getChatById, 
-  getChatMessages, 
+  getMessageHistory, // Use getMessageHistory instead of getChatMessages
   endRandomChat,
   initiateMatchmaking,
   handleMessage,
@@ -13,7 +13,6 @@ const {
   deleteMessage,
   archiveChat,
   addReaction,
-  getMessageHistory,
   handleTypingIndicator,
   handleBlockUser
 } = require('../controllers/chatController');
@@ -25,11 +24,8 @@ router.use(protect);
 // Chat routes
 router.get('/', getChats); // Get all active chats
 router.get('/:chatId', getChatById); // Get specific chat details
-router.get('/:chatId/messages', getChatMessages); // Get chat messages
+router.get('/:chatId/messages', getMessageHistory); // Get chat messages with pagination
 router.put('/:chatId/end', endRandomChat); // End a chat session
-// Get message history with pagination
-router.get('/:chatId/messages', getMessageHistory);
-
 
 // Matchmaking routes
 router.post('/start-search', async (req, res) => {
@@ -84,12 +80,12 @@ router.post('/:chatId/messages', async (req, res) => {
 });
 
 // New Routes
-router.get('/:chatId/search', searchMessages);
-router.put('/messages/:messageId', editMessage);
-router.delete('/messages/:messageId', deleteMessage);
-router.put('/:chatId/archive', archiveChat);
-router.post('/messages/:messageId/reactions', addReaction);
-router.post('/block/:userId', handleBlockUser);
+router.get('/:chatId/search', searchMessages); // Search messages within a chat
+router.put('/messages/:messageId', editMessage); // Edit a message
+router.delete('/messages/:messageId', deleteMessage); // Delete a message
+router.put('/:chatId/archive', archiveChat); // Archive a chat
+router.post('/messages/:messageId/reactions', addReaction); // Add reaction to a message
+router.post('/block/:userId', handleBlockUser); // Block a user
 
 // WebSocket routes
 router.post('/:chatId/typing', (req, res) => {
@@ -126,6 +122,5 @@ router.post('/create-session', async (req, res) => {
     });
   }
 });
-router.post('/messages/:messageId/reactions', addReaction);
 
 module.exports = router;
