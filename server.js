@@ -4,16 +4,10 @@ const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const cors = require('cors');
-const { Types: { ObjectId } } = mongoose;
-const ChatQueue = require('./utils/chatQueue');
-const authRoutes = require('./routes/authRoutes');
-const chatRoutes = require('./routes/chatRoutes');
 const { connectDB } = require('./config/db');
-const postRoutes = require('./routes/postRoutes');
 const User = require('./models/userModel');
 const Chat = require('./models/chatModel');
 const { handleMessage, createChatSession } = require('./controllers/chatController');
-const matchmakingQueue = new Map();
 
 // Load environment variables
 dotenv.config();
@@ -26,44 +20,37 @@ const server = http.createServer(app);
 const corsOptions = {
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: '*',
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   optionsSuccessStatus: 200
 };
 
 // Apply CORS middleware
 app.use(cors(corsOptions));
-
-// Handle preflight requests
 app.options('*', cors(corsOptions));
+app.use(express.json());
 
-// Configure Socket.IO with CORS
+// Configure Socket.IO
 const io = socketIo(server, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    methods: ['GET', 'POST']
   }
 });
 
 // Connect to MongoDB
 connectDB();
 
-// Middleware
-app.use(express.json());
-
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/chat', chatRoutes);
-app.use('/api/post', postRoutes);
-
-// Real-time Chat System ----------------------------------------------------
+// Active users map (userId -> userData)
 const activeUsers = new Map();
+
+// Matchmaking intervals map (userId -> interval)
+const matchIntervals = new Map();
 
 io.on('connection', (socket) => {
   console.log(`New connection: ${socket.id}`);
 
-  // Authentication middleware
+  // Authentication handler
   socket.on('authenticate', async ({ userId }) => {
     try {
       const user = await User.findById(userId);
@@ -71,7 +58,7 @@ io.on('connection', (socket) => {
 
       activeUsers.set(userId.toString(), {
         socketId: socket.id,
-        interests: user.interests,
+        interests: user.interests.map(i => i.toLowerCase()),
         chatPreference: user.chatPreference,
         status: 'online'
       });
@@ -88,63 +75,56 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Matchmaking System
+  // Start matchmaking handler
   socket.on('start-search', async ({ userId }) => {
     try {
       const user = await User.findById(userId);
       if (!user) return;
-  
-      // Add user to activeUsers map
+
+      // Add/update user in activeUsers
       activeUsers.set(userId.toString(), {
         socketId: socket.id,
         interests: user.interests.map(i => i.toLowerCase()),
         chatPreference: user.chatPreference,
         status: 'searching'
       });
-  
-      // Find a match
-      const match = await findMatch(userId.toString(), {
-        interests: user.interests,
-        chatPreference: user.chatPreference
-      });
-  
-      if (match) {
-        // Create chat session
-        const { chat } = await createChatSession(userId, match.id, user.chatPreference);
-        
-        // Notify both users
-        io.to(socket.id).emit('match-found', { 
-          chatId: chat._id, 
-          user: match 
-        });
-        io.to(match.socketId).emit('match-found', { 
-          chatId: chat._id, 
-          user: { 
-            id: user._id, 
-            username: user.username, 
-            interests: user.interests 
-          }
-        });
-  
-        console.log(`Match found: ${userId} and ${match.id}`);
-      } else {
-        console.log('No match found for user:', userId);
-      }
-  
+
+      console.log(`User ${userId} started searching`);
+
+      // Create matchmaking interval
+      const interval = setInterval(async () => {
+        const match = await findMatch(userId);
+        if (match) {
+          clearInterval(interval);
+          matchIntervals.delete(userId.toString());
+          handleMatchFound(userId, match);
+        }
+      }, 3000); // Check every 3 seconds
+
+      matchIntervals.set(userId.toString(), interval);
+
+      // Cleanup on disconnect
+      socket.once('disconnect', () => cleanupSearch(userId));
+      
+      // Handle manual search cancellation
+      socket.once('end-search', () => cleanupSearch(userId));
+
     } catch (error) {
       console.error('Matchmaking error:', error);
     }
   });
 
-  // Message Handling
+  // Message handler
   socket.on('send-message', async ({ chatId, senderId, content }) => {
     try {
       const result = await handleMessage({ chatId, senderId, content });
       if (!result.success) return;
 
-      const receiverSocket = activeUsers.get(result.receiverId.toString())?.socketId;
-      if (receiverSocket) {
-        io.to(receiverSocket).emit('new-message', {
+      const receiverId = result.receiverId.toString();
+      const receiverData = activeUsers.get(receiverId);
+      
+      if (receiverData) {
+        io.to(receiverData.socketId).emit('new-message', {
           chatId,
           message: result.message
         });
@@ -154,11 +134,11 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Disconnection Handler
+  // Disconnect handler
   socket.on('disconnect', async () => {
     for (const [userId, data] of activeUsers.entries()) {
       if (data.socketId === socket.id) {
-        activeUsers.delete(userId);
+        cleanupSearch(userId);
         await User.findByIdAndUpdate(userId, {
           online: false,
           chatStatus: 'offline',
@@ -171,50 +151,78 @@ io.on('connection', (socket) => {
   });
 });
 
-// Matchmaking Algorithm
-async function findMatch(userId, userData) {
-  console.log(`Finding match for user: ${userId}`);
-  
-  // Normalize interests to lowercase
-  const userInterests = userData.interests.map(interest => interest.toLowerCase());
-  
-  // Array to store potential matches
+// Matchmaking algorithm
+async function findMatch(userId) {
+  const searcher = activeUsers.get(userId.toString());
+  if (!searcher || searcher.status !== 'searching') return null;
+
   const potentialMatches = [];
   
-  for (const [id, data] of activeUsers.entries()) {
-    if (id !== userId && data.status === 'searching') {
-      // Normalize potential match's interests
-      const matchInterests = data.interests.map(interest => interest.toLowerCase());
+  for (const [id, candidate] of activeUsers.entries()) {
+    if (id !== userId.toString() && 
+        candidate.status === 'searching' &&
+        candidate.chatPreference === searcher.chatPreference) {
       
-      // Check for at least one common interest
-      const hasCommonInterest = matchInterests.some(interest => 
-        userInterests.includes(interest)
+      const commonInterests = candidate.interests.filter(interest =>
+        searcher.interests.includes(interest)
       );
 
-      // Check if chat preferences match
-      if (hasCommonInterest && data.chatPreference === userData.chatPreference) {
-        console.log(`Potential match found: ${id}`);
-        potentialMatches.push({ id, ...data });
+      if (commonInterests.length > 0) {
+        potentialMatches.push({ id, ...candidate });
       }
     }
   }
 
-  // If no matches found, return null
-  if (potentialMatches.length === 0) {
-    console.log('No potential matches found');
-    return null;
-  }
+  if (potentialMatches.length === 0) return null;
 
-  // Simple random match selection
+  // Select random match
   const match = potentialMatches[Math.floor(Math.random() * potentialMatches.length)];
-  console.log(`Selected match: ${match.id}`);
-
-  // Update status of both users to 'in_chat'
-  activeUsers.set(match.id, { ...match, status: 'in_chat' });
-  activeUsers.set(userId, { ...userData, status: 'in_chat' });
-
   return match;
 }
+
+// Handle successful match
+async function handleMatchFound(userId, match) {
+  try {
+    const { chat } = await createChatSession(userId, match.id, activeUsers.get(userId).chatPreference);
+    
+    // Update user statuses
+    activeUsers.set(userId.toString(), { ...activeUsers.get(userId), status: 'in_chat' });
+    activeUsers.set(match.id, { ...match, status: 'in_chat' });
+
+    // Notify both users
+    io.to(activeUsers.get(userId).socketId).emit('match-found', {
+      chatId: chat._id,
+      user: match
+    });
+
+    io.to(match.socketId).emit('match-found', {
+      chatId: chat._id,
+      user: {
+        id: userId,
+        username: (await User.findById(userId)).username,
+        interests: activeUsers.get(userId).interests
+      }
+    });
+
+    console.log(`Match created between ${userId} and ${match.id}`);
+  } catch (error) {
+    console.error('Match creation error:', error);
+  }
+}
+
+// Cleanup function
+function cleanupSearch(userId) {
+  const interval = matchIntervals.get(userId.toString());
+  if (interval) clearInterval(interval);
+  matchIntervals.delete(userId.toString());
+  activeUsers.delete(userId.toString());
+  console.log(`Search cleaned up for user: ${userId}`);
+}
+
+// Routes
+app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/chat', require('./routes/chatRoutes'));
+app.use('/api/post', require('./routes/postRoutes'));
 
 // Default route
 app.get('/', (req, res) => {
