@@ -48,12 +48,12 @@ const activeUsers = new Map();
 const matchIntervals = new Map();
 
 io.on('connection', (socket) => {
-  console.log(`[CONNECTION] New connection: ${socket.id}`);
+  console.log(`\n[CONNECTION] New connection: ${socket.id}`);
 
   // Authentication handler
   socket.on('authenticate', async ({ userId }) => {
     try {
-      console.log(`[AUTH] Attempting authentication for: ${userId}`);
+      console.log(`\n[AUTH] Attempting authentication for: ${userId}`);
       const user = await User.findById(userId);
       
       if (!user) {
@@ -61,19 +61,26 @@ io.on('connection', (socket) => {
         return;
       }
 
+      // Preserve existing status if present
+      const currentStatus = activeUsers.get(userId.toString())?.status || 'online';
+
       const userData = {
         socketId: socket.id,
-        interests: user.interests.map(i => i.toLowerCase()),
+        interests: user.interests.map(i => i.toLowerCase().trim()),
         chatPreference: user.chatPreference,
-        status: 'online'
+        status: currentStatus // Maintain existing status
       };
 
       activeUsers.set(userId.toString(), userData);
-      console.log(`[AUTH SUCCESS] User authenticated: ${userId}`, userData);
+      console.log(`[AUTH SUCCESS] User ${userId} authenticated:`, {
+        interests: userData.interests,
+        chatPreference: userData.chatPreference,
+        status: userData.status
+      });
 
       await User.findByIdAndUpdate(userId, { 
         online: true,
-        chatStatus: 'online',
+        chatStatus: currentStatus,
         lastActive: new Date()
       });
 
@@ -85,7 +92,7 @@ io.on('connection', (socket) => {
   // Start matchmaking handler
   socket.on('start-search', async ({ userId }) => {
     try {
-      console.log(`[SEARCH] Starting search for: ${userId}`);
+      console.log(`\n[SEARCH] Starting search for: ${userId}`);
       const user = await User.findById(userId);
       
       if (!user) {
@@ -93,28 +100,35 @@ io.on('connection', (socket) => {
         return;
       }
 
+      // Force fresh status update
       const userData = {
         socketId: socket.id,
-        interests: user.interests.map(i => i.toLowerCase()),
+        interests: user.interests.map(i => i.toLowerCase().trim()),
         chatPreference: user.chatPreference,
         status: 'searching'
       };
 
       activeUsers.set(userId.toString(), userData);
-      console.log(`[SEARCH STARTED] User data:`, userData);
+      console.log(`[SEARCH STATUS] User ${userId} now searching:`, userData);
 
+      // Clear existing interval if any
+      if (matchIntervals.has(userId.toString())) {
+        clearInterval(matchIntervals.get(userId.toString()));
+      }
+
+      // Create new matchmaking interval
       const interval = setInterval(async () => {
-        console.log(`[MATCHMAKING] Checking matches for ${userId}...`);
+        console.log(`\n[MATCHMAKING] Checking matches for ${userId}...`);
         try {
           const match = await findMatch(userId);
           
           if (match) {
-            console.log(`[MATCH FOUND] For ${userId}:`, match);
+            console.log(`[MATCH FOUND] For ${userId}:`, match.id);
             clearInterval(interval);
             matchIntervals.delete(userId.toString());
             handleMatchFound(userId, match);
           } else {
-            console.log(`[NO MATCH] No matches found for ${userId}`);
+            console.log(`[NO MATCH] No matches found for ${userId} this cycle`);
           }
         } catch (error) {
           console.error('[MATCHMAKING ERROR]', error);
@@ -122,10 +136,11 @@ io.on('connection', (socket) => {
       }, 3000);
 
       matchIntervals.set(userId.toString(), interval);
-      console.log(`[INTERVAL SET] For ${userId}`);
+      console.log(`[INTERVAL SET] Matchmaking interval started for ${userId}`);
 
+      // Cleanup handlers
       const cleanup = () => {
-        console.log(`[CLEANUP] Initiating for ${userId}`);
+        console.log(`\n[CLEANUP] Initiating for ${userId}`);
         cleanupSearch(userId);
       };
 
@@ -140,11 +155,11 @@ io.on('connection', (socket) => {
   // Message handler
   socket.on('send-message', async ({ chatId, senderId, content }) => {
     try {
-      console.log(`[MESSAGE] Received from ${senderId} in ${chatId}`);
+      console.log(`\n[MESSAGE] Received from ${senderId} in ${chatId}`);
       const result = await handleMessage({ chatId, senderId, content });
       
       if (!result.success) {
-        console.log(`[MESSAGE FAILED] Chat: ${chatId}`, result.error);
+        console.log(`[MESSAGE FAILED] Chat ${chatId}: ${result.error}`);
         return;
       }
 
@@ -152,13 +167,13 @@ io.on('connection', (socket) => {
       const receiverData = activeUsers.get(receiverId);
       
       if (receiverData) {
-        console.log(`[MESSAGE SENT] To ${receiverId} in ${chatId}`);
+        console.log(`[MESSAGE ROUTED] To ${receiverId} (${receiverData.socketId})`);
         io.to(receiverData.socketId).emit('new-message', {
           chatId,
           message: result.message
         });
       } else {
-        console.log(`[MESSAGE FAILED] Receiver offline: ${receiverId}`);
+        console.log(`[MESSAGE FAILED] Receiver ${receiverId} offline`);
       }
     } catch (error) {
       console.error('[MESSAGE ERROR]', error);
@@ -167,7 +182,7 @@ io.on('connection', (socket) => {
 
   // Disconnect handler
   socket.on('disconnect', async () => {
-    console.log(`[DISCONNECT] Socket: ${socket.id}`);
+    console.log(`\n[DISCONNECT] Socket: ${socket.id}`);
     for (const [userId, data] of activeUsers.entries()) {
       if (data.socketId === socket.id) {
         console.log(`[USER DISCONNECT] Cleaning up ${userId}`);
@@ -186,54 +201,76 @@ io.on('connection', (socket) => {
 // Matchmaking algorithm
 async function findMatch(userId) {
   try {
-    console.log(`[FIND MATCH] Starting for ${userId}`);
+    console.log(`\n[FIND MATCH] Starting for ${userId}`);
     const searcher = activeUsers.get(userId.toString());
     
+    // Validate searcher existence
     if (!searcher) {
       console.log(`[MATCH FAIL] Searcher ${userId} not in active users`);
       return null;
     }
 
+    // Validate searcher status
     if (searcher.status !== 'searching') {
-      console.log(`[MATCH FAIL] Searcher ${userId} status: ${searcher.status}`);
+      console.log(`[MATCH FAIL] Invalid status for ${userId}: ${searcher.status}`);
       return null;
     }
 
     console.log(`[MATCH PARAMS] For ${userId}:`, {
       interests: searcher.interests,
-      preference: searcher.chatPreference
+      preference: searcher.chatPreference,
+      status: searcher.status
     });
 
     const potentialMatches = [];
-    
-    for (const [id, candidate] of activeUsers.entries()) {
-      if (id === userId.toString()) continue;
+    console.log(`[ACTIVE USERS] Total: ${activeUsers.size}`);
 
-      console.log(`[CANDIDATE] Checking ${id}`, {
+    // Search through all active users
+    for (const [id, candidate] of activeUsers.entries()) {
+      if (id === userId.toString()) {
+        console.log(`[CANDIDATE] Skipping self: ${id}`);
+        continue;
+      }
+
+      console.log(`\n[CANDIDATE] Checking ${id}`, {
         status: candidate.status,
-        interests: candidate.interests,
-        preference: candidate.chatPreference
+        preference: candidate.chatPreference,
+        interests: candidate.interests
       });
 
-      if (candidate.status === 'searching' && candidate.chatPreference === searcher.chatPreference) {
-        const commonInterests = candidate.interests.filter(interest =>
-          searcher.interests.includes(interest)
-        );
+      // Validate candidate status
+      if (candidate.status !== 'searching') {
+        console.log(`[CANDIDATE REJECTED] ${id} status: ${candidate.status}`);
+        continue;
+      }
 
-        console.log(`[INTEREST CHECK] Between ${userId} and ${id}`, {
-          searcher: searcher.interests,
-          candidate: candidate.interests,
-          common: commonInterests
-        });
+      // Validate chat preference
+      if (candidate.chatPreference !== searcher.chatPreference) {
+        console.log(`[CANDIDATE REJECTED] Preference mismatch: ${candidate.chatPreference} vs ${searcher.chatPreference}`);
+        continue;
+      }
 
-        if (commonInterests.length > 0) {
-          console.log(`[POTENTIAL MATCH] Found between ${userId} and ${id}`);
-          potentialMatches.push({ id, ...candidate });
-        }
+      // Find common interests
+      const commonInterests = candidate.interests.filter(interest =>
+        searcher.interests.includes(interest)
+      );
+
+      console.log(`[INTEREST CHECK] Between ${userId} and ${id}`, {
+        searcher: searcher.interests,
+        candidate: candidate.interests,
+        common: commonInterests
+      });
+
+      if (commonInterests.length > 0) {
+        console.log(`[POTENTIAL MATCH] Found with ${id} (${commonInterests.length} common interests)`);
+        potentialMatches.push({ id, ...candidate });
+      } else {
+        console.log(`[NO COMMON INTERESTS] Between ${userId} and ${id}`);
       }
     }
 
-    console.log(`[MATCH RESULTS] For ${userId}: ${potentialMatches.length} matches`);
+    console.log(`[MATCH RESULTS] For ${userId}: ${potentialMatches.length} potential matches`);
+    
     return potentialMatches.length > 0 
       ? potentialMatches[Math.floor(Math.random() * potentialMatches.length)]
       : null;
@@ -247,21 +284,29 @@ async function findMatch(userId) {
 // Handle successful match
 async function handleMatchFound(userId, match) {
   try {
-    console.log(`[CHAT CREATION] Starting for ${userId} and ${match.id}`);
-    const { chat } = await createChatSession(userId, match.id, activeUsers.get(userId).chatPreference);
+    console.log(`\n[CHAT CREATION] Starting for ${userId} and ${match.id}`);
     
-    console.log(`[STATUS UPDATE] Marking ${userId} and ${match.id} as in_chat`);
+    // Create chat session
+    const { chat } = await createChatSession(userId, match.id, activeUsers.get(userId).chatPreference);
+    console.log(`[CHAT CREATED] ID: ${chat._id}`);
+
+    // Update user statuses
     activeUsers.set(userId.toString(), { ...activeUsers.get(userId), status: 'in_chat' });
     activeUsers.set(match.id, { ...match, status: 'in_chat' });
+    console.log(`[STATUS UPDATE] ${userId} and ${match.id} marked 'in_chat'`);
 
-    const userA = await User.findById(userId);
-    const userB = await User.findById(match.id);
+    // Get user details for notification
+    const [userA, userB] = await Promise.all([
+      User.findById(userId),
+      User.findById(match.id)
+    ]);
 
-    console.log(`[MATCH NOTIFICATION] Sending to both users`, {
-      chatId: chat._id,
-      users: [userA.username, userB.username]
+    console.log(`[MATCH NOTIFICATION] Sending to:`, {
+      userA: userA.username,
+      userB: userB.username
     });
 
+    // Notify both users
     io.to(activeUsers.get(userId).socketId).emit('match-found', {
       chatId: chat._id,
       user: {
@@ -280,7 +325,7 @@ async function handleMatchFound(userId, match) {
       }
     });
 
-    console.log(`[MATCH COMPLETE] Created chat ${chat._id}`);
+    console.log(`[MATCH COMPLETE] Successfully paired ${userId} and ${match.id}`);
     return chat;
     
   } catch (error) {
@@ -291,16 +336,19 @@ async function handleMatchFound(userId, match) {
 
 // Cleanup function
 function cleanupSearch(userId) {
-  console.log(`[CLEANUP] Starting for ${userId}`);
-  const interval = matchIntervals.get(userId.toString());
+  console.log(`\n[CLEANUP] Starting for ${userId}`);
   
+  // Clear interval
+  const interval = matchIntervals.get(userId.toString());
   if (interval) {
     console.log(`[CLEANUP] Clearing interval for ${userId}`);
     clearInterval(interval);
   }
   
+  // Remove from collections
   matchIntervals.delete(userId.toString());
   activeUsers.delete(userId.toString());
+  
   console.log(`[CLEANUP COMPLETE] For ${userId}`);
 }
 
@@ -317,5 +365,5 @@ app.get('/', (req, res) => {
 // Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`[SERVER] Running on port ${PORT}`);
+  console.log(`\n[SERVER] Running on port ${PORT}`);
 });
