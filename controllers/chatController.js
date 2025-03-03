@@ -3,7 +3,7 @@ const Message = require('../models/messageModel');
 const User = require('../models/userModel');
 const mongoose = require('mongoose');
 
-// Get all chats for a user
+// Get all active chats for a user
 exports.getChats = async (req, res) => {
   try {
     const chats = await Chat.find({
@@ -12,7 +12,7 @@ exports.getChats = async (req, res) => {
     })
     .populate({
       path: 'participants',
-      select: 'firstName lastName username profileCreatedAt interests gender location'
+      select: 'firstName lastName username profileCreatedAt interests gender location online'
     })
     .populate({
       path: 'lastMessage',
@@ -33,7 +33,7 @@ exports.getChats = async (req, res) => {
   }
 };
 
-// Get single chat by ID
+// Get single chat by ID with participant details
 exports.getChatById = async (req, res) => {
   try {
     const chat = await Chat.findOne({
@@ -43,7 +43,7 @@ exports.getChatById = async (req, res) => {
     })
     .populate({
       path: 'participants',
-      select: 'firstName lastName username profileCreatedAt interests gender location'
+      select: 'firstName lastName username profileCreatedAt interests gender location online'
     });
 
     if (!chat) {
@@ -65,10 +65,9 @@ exports.getChatById = async (req, res) => {
   }
 };
 
-// Get messages for a chat
+// Get messages for a chat with read receipts
 exports.getChatMessages = async (req, res) => {
   try {
-    // Check if chat exists and user is a participant
     const chat = await Chat.findOne({
       _id: req.params.chatId,
       participants: req.user._id,
@@ -82,7 +81,6 @@ exports.getChatMessages = async (req, res) => {
       });
     }
 
-    // Get messages
     const messages = await Message.find({ chat: req.params.chatId })
       .populate({
         path: 'sender',
@@ -113,32 +111,39 @@ exports.getChatMessages = async (req, res) => {
   }
 };
 
-// End current random chat
+// End chat and notify participants
 exports.endRandomChat = async (req, res) => {
   try {
     const { chatId } = req.params;
+    const userId = req.user._id;
 
-    // Check if chat exists and user is a participant
-    const chat = await Chat.findOne({
-      _id: chatId,
-      participants: req.user._id,
-      isActive: true
-    });
+    const chat = await Chat.findOneAndUpdate(
+      {
+        _id: chatId,
+        participants: userId,
+        isActive: true
+      },
+      { isActive: false },
+      { new: true }
+    ).populate('participants');
 
     if (!chat) {
       return res.status(404).json({
         success: false,
-        message: 'Chat not found'
+        message: 'Chat not found or already ended'
       });
     }
 
-    // Mark chat as inactive
-    chat.isActive = false;
-    await chat.save();
+    // Update user statuses
+    await User.updateMany(
+      { _id: { $in: chat.participants } },
+      { $set: { chatStatus: 'online' } }
+    );
 
     res.status(200).json({
       success: true,
-      message: 'Chat ended successfully'
+      message: 'Chat ended successfully',
+      data: chat
     });
   } catch (error) {
     res.status(500).json({
@@ -148,110 +153,109 @@ exports.endRandomChat = async (req, res) => {
   }
 };
 
-// Find a random user to chat with based on mutual interests
-exports.findRandomMatch = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const chatPreference = req.user.chatPreference;
-    const userInterests = req.user.interests;
+// WebSocket Handlers ---------------------------------------------------
 
-    // Find users who:
-    // 1. Are not the current user
-    // 2. Are online
-    // 3. Have at least one matching interest
-    // 4. Have the same chat preference
-    // 5. Are not already in an active chat with the current user
-    
-    // First, find active chats this user is in
-    const activeChats = await Chat.find({
-      participants: userId,
+// Initialize matchmaking search
+exports.initiateMatchmaking = async (userId) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        online: true,
+        chatStatus: 'searching',
+        lastActive: Date.now()
+      },
+      { new: true }
+    );
+
+    return { 
+      success: true, 
+      user: {
+        id: user._id,
+        interests: user.interests,
+        chatPreference: user.chatPreference
+      }
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
+// Handle real-time messages
+exports.handleMessage = async ({ chatId, senderId, content }) => {
+  try {
+    const newMessage = await Message.create({
+      chat: chatId,
+      sender: senderId,
+      content
+    });
+
+    const populatedMessage = await Message.findById(newMessage._id)
+      .populate({
+        path: 'sender',
+        select: 'firstName lastName username'
+      });
+
+    const updatedChat = await Chat.findByIdAndUpdate(
+      chatId,
+      { 
+        lastMessage: newMessage._id,
+        $inc: { unreadCount: 1 }
+      },
+      { new: true }
+    );
+
+    return {
+      success: true,
+      message: populatedMessage,
+      chat: updatedChat,
+      receiverId: updatedChat.participants.find(id => !id.equals(senderId))
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
+// Create new chat session
+exports.createChatSession = async (user1Id, user2Id, chatType) => {
+  try {
+    // Check for existing active chat
+    const existingChat = await Chat.findOne({
+      participants: { $all: [user1Id, user2Id] },
       isActive: true
     });
-    
-    // Get IDs of users already chatting with this user
-    const activeParticipantIds = [];
-    activeChats.forEach(chat => {
-      chat.participants.forEach(participantId => {
-        if (!participantId.equals(userId)) {
-          activeParticipantIds.push(participantId);
-        }
-      });
-    });
-    
-    // Find potential matches
-    const potentialMatches = await User.aggregate([
-      // Exclude current user and users already chatting with
-      {
-        $match: {
-          _id: { 
-            $ne: mongoose.Types.ObjectId(userId),
-            $nin: activeParticipantIds.map(id => mongoose.Types.ObjectId(id))
-          },
-          online: true,
-          chatPreference: chatPreference
-        }
-      },
-      // Add field with count of matching interests
-      {
-        $addFields: {
-          matchingInterestsCount: {
-            $size: {
-              $setIntersection: ["$interests", userInterests]
-            }
-          }
-        }
-      },
-      // Only include users with at least one matching interest
-      {
-        $match: {
-          matchingInterestsCount: { $gt: 0 }
-        }
-      },
-      // Sort by number of matching interests (descending)
-      {
-        $sort: {
-          matchingInterestsCount: -1,
-          lastActive: -1
-        }
-      },
-      // Limit to one random match
-      {
-        $limit: 1
-      }
-    ]);
 
-    if (potentialMatches.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'No matching users found at the moment. Try again later.'
-      });
+    if (existingChat) {
+      return {
+        success: true,
+        chat: existingChat,
+        isNew: false
+      };
     }
 
-    const matchedUser = potentialMatches[0];
-
-    // Create a new chat
     const newChat = await Chat.create({
-      participants: [userId, matchedUser._id],
-      chatType: chatPreference,
+      participants: [user1Id, user2Id],
+      chatType,
       isActive: true
     });
 
-    // Populate participant details
+    await User.updateMany(
+      { _id: { $in: [user1Id, user2Id] } },
+      { chatStatus: 'in_chat' }
+    );
+
     const populatedChat = await Chat.findById(newChat._id)
       .populate({
         path: 'participants',
-        select: 'firstName lastName username profileCreatedAt interests gender location'
+        select: 'firstName lastName username profileCreatedAt interests gender location online'
       });
 
-    res.status(200).json({
+    return {
       success: true,
-      message: 'Match found!',
-      data: populatedChat
-    });
+      chat: populatedChat,
+      isNew: true
+    };
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    return { success: false, error: error.message };
   }
 };
