@@ -15,7 +15,6 @@ const Chat = require('./models/chatModel');
 const { handleMessage, createChatSession } = require('./controllers/chatController');
 const matchmakingQueue = new Map();
 
-
 // Load environment variables
 dotenv.config();
 
@@ -95,33 +94,30 @@ io.on('connection', (socket) => {
       const user = await User.findById(userId);
       if (!user) return;
   
-      // Add user to queue
-      matchmakingQueue.set(userId.toString(), {
+      // Add user to activeUsers map
+      activeUsers.set(userId.toString(), {
         socketId: socket.id,
         interests: user.interests.map(i => i.toLowerCase()),
+        chatPreference: user.chatPreference,
+        status: 'searching'
+      });
+  
+      // Find a match
+      const match = await findMatch(userId.toString(), {
+        interests: user.interests,
         chatPreference: user.chatPreference
       });
   
-      // Immediate match attempt
-      const match = Array.from(matchmakingQueue.entries())
-        .find(([id, data]) => 
-          id !== userId.toString() &&
-          data.chatPreference === user.chatPreference &&
-          data.interests.some(i => user.interests.includes(i))
-        );
-  
       if (match) {
-        const [matchId, matchData] = match;
-        
         // Create chat session
-        const { chat } = await createChatSession(userId, matchId, user.chatPreference);
+        const { chat } = await createChatSession(userId, match.id, user.chatPreference);
         
         // Notify both users
         io.to(socket.id).emit('match-found', { 
           chatId: chat._id, 
-          user: matchData 
+          user: match 
         });
-        io.to(matchData.socketId).emit('match-found', { 
+        io.to(match.socketId).emit('match-found', { 
           chatId: chat._id, 
           user: { 
             id: user._id, 
@@ -130,17 +126,15 @@ io.on('connection', (socket) => {
           }
         });
   
-        // Remove from queue
-        matchmakingQueue.delete(userId.toString());
-        matchmakingQueue.delete(matchId);
+        console.log(`Match found: ${userId} and ${match.id}`);
+      } else {
+        console.log('No match found for user:', userId);
       }
   
     } catch (error) {
       console.error('Matchmaking error:', error);
-      socket.emit('match-error', { message: 'Failed to find match' });
     }
   });
-  
 
   // Message Handling
   socket.on('send-message', async ({ chatId, senderId, content }) => {
