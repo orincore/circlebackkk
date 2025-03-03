@@ -91,13 +91,18 @@ io.on('connection', (socket) => {
   socket.on('start-search', async ({ userId }) => {
     try {
       const userData = activeUsers.get(userId);
-      if (!userData) return;
-
+      if (!userData) {
+        console.log(`User data not found for userId: ${userId}`);
+        return;
+      }
+  
+      console.log(`User ${userId} started searching`);
       activeUsers.set(userId, { ...userData, status: 'searching' });
       await User.findByIdAndUpdate(userId, { chatStatus: 'searching' });
       
       const match = await findMatch(userId, userData);
       if (match) {
+        console.log(`Match found: ${match.id}`);
         const { chat, isNew } = await createChatSession(userId, match.id, userData.chatPreference);
         
         io.to(userData.socketId).to(match.socketId).emit('match-found', {
@@ -105,6 +110,8 @@ io.on('connection', (socket) => {
           participants: chat.participants,
           isNew
         });
+      } else {
+        console.log('No match found');
       }
     } catch (error) {
       console.error('Matchmaking error:', error);
@@ -149,21 +156,40 @@ io.on('connection', (socket) => {
 
 // Matchmaking Algorithm
 async function findMatch(userId, userData) {
+  console.log(`Finding match for user: ${userId}`);
+  console.log(`User interests:`, userData.interests);
+
   const potentialMatches = [];
   
   for (const [id, data] of activeUsers.entries()) {
     if (id !== userId && 
         data.status === 'searching' &&
-        data.chatPreference === userData.chatPreference &&
-        data.interests.some(interest => userData.interests.includes(interest))) {
-      potentialMatches.push({ id, ...data });
+        data.chatPreference === userData.chatPreference) {
+      
+      const commonInterests = data.interests.filter(interest => 
+        userData.interests.includes(interest)
+      );
+
+      console.log(`Checking match with user ${id}`);
+      console.log(`Their interests:`, data.interests);
+      console.log(`Common interests:`, commonInterests);
+
+      if (commonInterests.length > 0) {
+        console.log(`Potential match found: ${id}`);
+        potentialMatches.push({ id, ...data });
+      }
     }
   }
 
-  if (potentialMatches.length === 0) return null;
-  
+  if (potentialMatches.length === 0) {
+    console.log('No potential matches found');
+    return null;
+  }
+
   // Simple random match selection
   const match = potentialMatches[Math.floor(Math.random() * potentialMatches.length)];
+  console.log(`Selected match: ${match.id}`);
+
   activeUsers.set(match.id, { ...match, status: 'in_chat' });
   activeUsers.set(userId, { ...userData, status: 'in_chat' });
 
