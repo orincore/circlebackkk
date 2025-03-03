@@ -4,26 +4,36 @@ const messageSchema = new mongoose.Schema({
   chat: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Chat',
-    required: true
+    required: true,
   },
   sender: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
   },
   content: {
     type: String,
     required: true,
-    trim: true
+    trim: true,
   },
   readBy: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }]
+    ref: 'User',
+  }],
+  edited: {
+    type: Boolean,
+    default: false,
+  },
+  reactions: [{
+    emoji: String,
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    _id: false,
+  }],
 }, {
-  timestamps: true
+  timestamps: true,
 });
 
-const Message = mongoose.model('Message', messageSchema);
-
-module.exports = Message;
+module.exports = mongoose.model('Message', messageSchema);
