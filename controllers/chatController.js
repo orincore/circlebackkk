@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
 const pendingMatches = new Map();
 
 // Get all active chats for a user
-exports.getChats = async (req, res) => {
+const getChats = async (req, res) => {
   try {
     const chats = await Chat.find({
       participants: req.user._id,
@@ -30,15 +30,12 @@ exports.getChats = async (req, res) => {
       data: chats
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // Get single chat by ID with participant details
-exports.getChatById = async (req, res) => {
+const getChatById = async (req, res) => {
   try {
     const chat = await Chat.findOne({
       _id: req.params.chatId,
@@ -49,28 +46,17 @@ exports.getChatById = async (req, res) => {
       path: 'participants',
       select: 'firstName lastName username profileCreatedAt interests gender location online'
     });
-
     if (!chat) {
-      return res.status(404).json({
-        success: false,
-        message: 'Chat not found'
-      });
+      return res.status(404).json({ success: false, message: 'Chat not found' });
     }
-
-    res.status(200).json({
-      success: true,
-      data: chat
-    });
+    res.status(200).json({ success: true, data: chat });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // Create new chat session with mutual acceptance (pending match)
-exports.createChatSession = async (user1Id, user2Id, chatType) => {
+const createChatSession = async (user1Id, user2Id, chatType) => {
   try {
     // Check for an existing pending match between these users
     const existingMatch = Array.from(pendingMatches.values()).find(match => 
@@ -88,7 +74,7 @@ exports.createChatSession = async (user1Id, user2Id, chatType) => {
       expiresAt: Date.now() + 120000 // 2 minutes expiration
     });
 
-    // Set expiration timer
+    // Set expiration timer to clean up pending match
     setTimeout(() => {
       if (pendingMatches.has(chatId)) {
         pendingMatches.delete(chatId);
@@ -102,7 +88,7 @@ exports.createChatSession = async (user1Id, user2Id, chatType) => {
 };
 
 // Handle match acceptance
-exports.handleMatchAcceptance = async (chatId, userId) => {
+const handleMatchAcceptance = async (chatId, userId) => {
   try {
     const match = pendingMatches.get(chatId);
     if (!match) return { success: false, error: 'Match expired' };
@@ -138,7 +124,7 @@ exports.handleMatchAcceptance = async (chatId, userId) => {
         pendingMatches.delete(chatId);
         return { success: true, chat };
       } else {
-        // At least one rejection
+        // At least one rejection: cancel match
         await User.updateMany(
           { _id: { $in: match.users } },
           { chatStatus: 'online' }
@@ -153,7 +139,7 @@ exports.handleMatchAcceptance = async (chatId, userId) => {
 };
 
 // Handle match rejection
-exports.handleMatchRejection = async (chatId, userId) => {
+const handleMatchRejection = async (chatId, userId) => {
   try {
     const match = pendingMatches.get(chatId);
     if (!match) return { success: false, error: 'Match expired' };
@@ -189,7 +175,7 @@ exports.handleMatchRejection = async (chatId, userId) => {
 };
 
 // Enhanced message handler with read receipts
-exports.handleMessage = async ({ chatId, senderId, content }) => {
+const handleMessage = async ({ chatId, senderId, content }) => {
   try {
     const newMessage = await Message.create({
       chat: chatId,
@@ -221,8 +207,8 @@ exports.handleMessage = async ({ chatId, senderId, content }) => {
   }
 };
 
-// Enhanced matchmaking initialization
-exports.initiateMatchmaking = async (userId) => {
+// Enhanced matchmaking initialization: sets user status to searching
+const initiateMatchmaking = async (userId) => {
   try {
     const user = await User.findByIdAndUpdate(
       userId,
@@ -247,7 +233,7 @@ exports.initiateMatchmaking = async (userId) => {
 };
 
 // Get messages for a chat with read receipts
-exports.getChatMessages = async (req, res) => {
+const getChatMessages = async (req, res) => {
   try {
     const chat = await Chat.findOne({
       _id: req.params.chatId,
@@ -255,10 +241,7 @@ exports.getChatMessages = async (req, res) => {
       isActive: true
     });
     if (!chat) {
-      return res.status(404).json({
-        success: false,
-        message: 'Chat not found'
-      });
+      return res.status(404).json({ success: false, message: 'Chat not found' });
     }
     const messages = await Message.find({ chat: req.params.chatId })
       .populate({
@@ -281,15 +264,12 @@ exports.getChatMessages = async (req, res) => {
       data: messages
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // End chat and notify participants
-exports.endRandomChat = async (req, res) => {
+const endRandomChat = async (req, res) => {
   try {
     const { chatId } = req.params;
     const userId = req.user._id;
@@ -303,10 +283,7 @@ exports.endRandomChat = async (req, res) => {
       { new: true }
     ).populate('participants');
     if (!chat) {
-      return res.status(404).json({
-        success: false,
-        message: 'Chat not found or already ended'
-      });
+      return res.status(404).json({ success: false, message: 'Chat not found or already ended' });
     }
     // Update user statuses back to online
     await User.updateMany(
@@ -319,16 +296,12 @@ exports.endRandomChat = async (req, res) => {
       data: chat
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // New Features: searchMessages, editMessage, deleteMessage, archiveChat, addReaction
-
-exports.searchMessages = async (req, res) => {
+const searchMessages = async (req, res) => {
   try {
     const { query } = req.query;
     const messages = await Message.find({
@@ -347,7 +320,7 @@ exports.searchMessages = async (req, res) => {
   }
 };
 
-exports.editMessage = async (req, res) => {
+const editMessage = async (req, res) => {
   try {
     const message = await Message.findOneAndUpdate(
       { _id: req.params.messageId, sender: req.user._id },
@@ -361,7 +334,7 @@ exports.editMessage = async (req, res) => {
   }
 };
 
-exports.deleteMessage = async (req, res) => {
+const deleteMessage = async (req, res) => {
   try {
     const message = await Message.findOneAndDelete({
       _id: req.params.messageId,
@@ -374,7 +347,7 @@ exports.deleteMessage = async (req, res) => {
   }
 };
 
-exports.archiveChat = async (req, res) => {
+const archiveChat = async (req, res) => {
   try {
     const chat = await Chat.findOneAndUpdate(
       { _id: req.params.chatId, participants: req.user._id },
@@ -387,7 +360,7 @@ exports.archiveChat = async (req, res) => {
   }
 };
 
-exports.addReaction = async (req, res) => {
+const addReaction = async (req, res) => {
   try {
     const { messageId } = req.params;
     const { emoji } = req.body;
@@ -397,25 +370,16 @@ exports.addReaction = async (req, res) => {
       { new: true }
     ).populate('sender', 'username avatar');
     if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found',
-      });
+      return res.status(404).json({ success: false, message: 'Message not found' });
     }
-    res.status(200).json({
-      success: true,
-      data: message,
-    });
+    res.status(200).json({ success: true, data: message });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // Updated getChatMessages with pagination
-exports.getChatMessages = async (req, res) => {
+const getMessageHistory = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -437,4 +401,22 @@ exports.getChatMessages = async (req, res) => {
   }
 };
 
-module.exports = exports;
+module.exports = {
+  getChats,
+  getChatById,
+  createChatSession,
+  handleMatchAcceptance,
+  handleMatchRejection,
+  handleMessage,
+  initiateMatchmaking,
+  getChatMessages,
+  endRandomChat,
+  searchMessages,
+  editMessage,
+  deleteMessage,
+  archiveChat,
+  addReaction,
+  getMessageHistory,
+  handleTypingIndicator,
+  handleBlockUser
+};
