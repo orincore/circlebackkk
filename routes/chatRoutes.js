@@ -3,9 +3,9 @@ const router = express.Router();
 const { 
   getChats, 
   getChatById, 
-  getChatMessages,
+  getChatMessages,   // Note: This route now uses pagination (getMessageHistory)
   endRandomChat,
-  initiateMatchmaking,
+  initiateMatchmaking,  // For starting matchmaking (sets user status to searching)
   handleMessage,
   createChatSession,
   searchMessages,
@@ -14,7 +14,7 @@ const {
   archiveChat,
   addReaction,
   handleBlockUser,
-  getMessageHistory,
+  getMessageHistory,  // Paginated message history endpoint
   handleTypingIndicator
 } = require('../controllers/chatController');
 const { protect } = require('../middleware/authMiddleware');
@@ -23,10 +23,10 @@ const { protect } = require('../middleware/authMiddleware');
 router.use(protect);
 
 // Chat routes
-router.get('/', getChats); // Get all active chats
-router.get('/:chatId', getChatById); // Get specific chat details
-router.get('/:chatId/messages', getMessageHistory); // Get chat messages with pagination
-router.put('/:chatId/end', endRandomChat); // End a chat session
+router.get('/', getChats); // Get all active chats for the authenticated user
+router.get('/:chatId', getChatById); // Get specific chat details by ID
+router.get('/:chatId/messages', getMessageHistory); // Get paginated chat messages
+router.put('/:chatId/end', endRandomChat); // End an active chat session
 router.put('/:chatId/archive', archiveChat); // Archive a chat
 
 // Message routes
@@ -58,9 +58,9 @@ router.post('/:chatId/messages', async (req, res) => {
     });
   }
 });
-router.put('/messages/:messageId', editMessage); // Edit a message
-router.delete('/messages/:messageId', deleteMessage); // Delete a message
-router.post('/messages/:messageId/reactions', addReaction); // Add reaction to a message
+router.put('/messages/:messageId', editMessage); // Edit a specific message
+router.delete('/messages/:messageId', deleteMessage); // Delete a specific message
+router.post('/messages/:messageId/reactions', addReaction); // Add a reaction to a message
 
 // Matchmaking routes
 router.post('/start-search', async (req, res) => {
@@ -87,7 +87,7 @@ router.post('/start-search', async (req, res) => {
   }
 });
 
-// Chat session creation route
+// Chat session creation route (for direct chat creation based on mutual acceptance)
 router.post('/create-session', async (req, res) => {
   try {
     const { participantId, chatType } = req.body;
@@ -120,9 +120,9 @@ router.post('/create-session', async (req, res) => {
 // User interaction routes
 router.post('/block/:userId', handleBlockUser); // Block a user
 
-// WebSocket routes
+// WebSocket routes (for typing indicator)
 router.post('/:chatId/typing', (req, res) => {
-  // Assuming req.io is available from app.js middleware
+  // Assuming req.io is injected via middleware in app.js
   handleTypingIndicator(req.io, req.params.chatId, req.user._id);
   res.status(200).json({ success: true });
 });
