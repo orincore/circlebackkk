@@ -3,9 +3,9 @@ const router = express.Router();
 const { 
   getChats, 
   getChatById, 
-  getChatMessages,   // Note: This route now uses pagination (getMessageHistory)
+  getChatMessages,    // legacy route; use getMessageHistory for pagination
   endRandomChat,
-  initiateMatchmaking,  // For starting matchmaking (sets user status to searching)
+  initiateMatchmaking,  // Sets user status to 'searching'
   handleMessage,
   createChatSession,
   searchMessages,
@@ -14,7 +14,7 @@ const {
   archiveChat,
   addReaction,
   handleBlockUser,
-  getMessageHistory,  // Paginated message history endpoint
+  getMessageHistory,   // Paginated message history endpoint
   handleTypingIndicator
 } = require('../controllers/chatController');
 const { protect } = require('../middleware/authMiddleware');
@@ -39,14 +39,12 @@ router.post('/:chatId/messages', async (req, res) => {
       senderId: req.user._id,
       content
     });
-    
     if (!result.success) {
       return res.status(400).json({
         success: false,
         message: result.error
       });
     }
-    
     res.status(201).json({
       success: true,
       message: result.message
@@ -66,14 +64,12 @@ router.post('/messages/:messageId/reactions', addReaction); // Add a reaction to
 router.post('/start-search', async (req, res) => {
   try {
     const result = await initiateMatchmaking(req.user._id);
-    
     if (!result.success) {
       return res.status(400).json({
         success: false,
         message: result.error
       });
     }
-    
     res.status(200).json({
       success: true,
       message: 'Search started',
@@ -96,18 +92,16 @@ router.post('/create-session', async (req, res) => {
       participantId,
       chatType || req.user.chatPreference
     );
-    
     if (!result.success) {
       return res.status(400).json({
         success: false,
         message: result.error
       });
     }
-    
     res.status(201).json({
       success: true,
       chat: result.chat,
-      isNew: result.isNew
+      isNew: result.isNew || true
     });
   } catch (error) {
     res.status(500).json({
