@@ -14,15 +14,15 @@ const getChats = async (req, res) => {
       participants: req.user._id,
       isActive: true
     })
-    .populate({
-      path: 'participants',
-      select: 'firstName lastName username profileCreatedAt interests gender location online'
-    })
-    .populate({
-      path: 'lastMessage',
-      select: 'content sender createdAt readBy'
-    })
-    .sort({ updatedAt: -1 });
+      .populate({
+        path: 'participants',
+        select: 'firstName lastName username profileCreatedAt interests gender location online'
+      })
+      .populate({
+        path: 'lastMessage',
+        select: 'content sender createdAt readBy'
+      })
+      .sort({ updatedAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -30,7 +30,10 @@ const getChats = async (req, res) => {
       data: chats
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
@@ -42,16 +45,27 @@ const getChatById = async (req, res) => {
       participants: req.user._id,
       isActive: true
     })
-    .populate({
-      path: 'participants',
-      select: 'firstName lastName username profileCreatedAt interests gender location online'
-    });
+      .populate({
+        path: 'participants',
+        select: 'firstName lastName username profileCreatedAt interests gender location online'
+      });
+
     if (!chat) {
-      return res.status(404).json({ success: false, message: 'Chat not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Chat not found'
+      });
     }
-    res.status(200).json({ success: true, data: chat });
+
+    res.status(200).json({
+      success: true,
+      data: chat
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
@@ -59,7 +73,7 @@ const getChatById = async (req, res) => {
 const createChatSession = async (user1Id, user2Id, chatType) => {
   try {
     // Check for an existing pending match between these users
-    const existingMatch = Array.from(pendingMatches.values()).find(match => 
+    const existingMatch = Array.from(pendingMatches.values()).find(match =>
       match.users.includes(user1Id) && match.users.includes(user2Id)
     );
     if (existingMatch) return { success: true, chatId: existingMatch.chatId };
@@ -74,7 +88,7 @@ const createChatSession = async (user1Id, user2Id, chatType) => {
       expiresAt: Date.now() + 120000 // 2 minutes expiration
     });
 
-    // Set expiration timer to clean up pending match
+    // Set expiration timer
     setTimeout(() => {
       if (pendingMatches.has(chatId)) {
         pendingMatches.delete(chatId);
@@ -124,7 +138,7 @@ const handleMatchAcceptance = async (chatId, userId) => {
         pendingMatches.delete(chatId);
         return { success: true, chat };
       } else {
-        // At least one rejection: cancel match
+        // At least one rejection
         await User.updateMany(
           { _id: { $in: match.users } },
           { chatStatus: 'online' }
@@ -183,19 +197,22 @@ const handleMessage = async ({ chatId, senderId, content }) => {
       content,
       readBy: [senderId]
     });
+
     const populatedMessage = await Message.findById(newMessage._id)
       .populate({
         path: 'sender',
         select: 'firstName lastName username'
       });
+
     const updatedChat = await Chat.findByIdAndUpdate(
       chatId,
-      { 
+      {
         lastMessage: newMessage._id,
         $inc: { unreadCount: 1 }
       },
       { new: true }
     );
+
     return {
       success: true,
       message: populatedMessage,
@@ -219,8 +236,8 @@ const initiateMatchmaking = async (userId) => {
       },
       { new: true }
     );
-    return { 
-      success: true, 
+    return {
+      success: true,
       user: {
         id: user._id,
         interests: user.interests.map(i => i.toLowerCase().trim()),
@@ -240,24 +257,31 @@ const getChatMessages = async (req, res) => {
       participants: req.user._id,
       isActive: true
     });
+
     if (!chat) {
-      return res.status(404).json({ success: false, message: 'Chat not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Chat not found'
+      });
     }
+
     const messages = await Message.find({ chat: req.params.chatId })
       .populate({
         path: 'sender',
         select: 'firstName lastName username'
       })
       .sort({ createdAt: 1 });
+
     // Mark messages as read
     await Message.updateMany(
-      { 
-        chat: req.params.chatId, 
+      {
+        chat: req.params.chatId,
         sender: { $ne: req.user._id },
         readBy: { $ne: req.user._id }
       },
       { $push: { readBy: req.user._id } }
     );
+
     res.status(200).json({
       success: true,
       count: messages.length,
@@ -282,14 +306,20 @@ const endRandomChat = async (req, res) => {
       { isActive: false },
       { new: true }
     ).populate('participants');
+
     if (!chat) {
-      return res.status(404).json({ success: false, message: 'Chat not found or already ended' });
+      return res.status(404).json({
+        success: false,
+        message: 'Chat not found or already ended'
+      });
     }
+
     // Update user statuses back to online
     await User.updateMany(
       { _id: { $in: chat.participants } },
       { $set: { chatStatus: 'online' } }
     );
+
     res.status(200).json({
       success: true,
       message: 'Chat ended successfully',
@@ -301,6 +331,7 @@ const endRandomChat = async (req, res) => {
 };
 
 // New Features: searchMessages, editMessage, deleteMessage, archiveChat, addReaction
+
 const searchMessages = async (req, res) => {
   try {
     const { query } = req.query;
@@ -308,8 +339,9 @@ const searchMessages = async (req, res) => {
       chat: req.params.chatId,
       content: { $regex: query, $options: 'i' }
     })
-    .populate('sender', 'username')
-    .limit(50);
+      .populate('sender', 'username')
+      .limit(50);
+
     res.status(200).json({
       success: true,
       count: messages.length,
@@ -327,7 +359,10 @@ const editMessage = async (req, res) => {
       { content: req.body.content, edited: true },
       { new: true }
     ).populate('sender', 'username');
-    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+
+    if (!message)
+      return res.status(404).json({ success: false, message: 'Message not found' });
+
     res.status(200).json({ success: true, data: message });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -340,7 +375,10 @@ const deleteMessage = async (req, res) => {
       _id: req.params.messageId,
       sender: req.user._id
     });
-    if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+
+    if (!message)
+      return res.status(404).json({ success: false, message: 'Message not found' });
+
     res.status(200).json({ success: true, message: 'Message deleted' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -369,10 +407,18 @@ const addReaction = async (req, res) => {
       { $push: { reactions: { emoji, userId: req.user._id } } },
       { new: true }
     ).populate('sender', 'username avatar');
+
     if (!message) {
-      return res.status(404).json({ success: false, message: 'Message not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
+      });
     }
-    res.status(200).json({ success: true, data: message });
+
+    res.status(200).json({
+      success: true,
+      data: message
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -389,6 +435,7 @@ const getMessageHistory = async (req, res) => {
       .limit(limit)
       .populate('sender', 'username')
       .sort({ createdAt: -1 });
+
     res.status(200).json({
       success: true,
       count: messages.length,
@@ -399,6 +446,12 @@ const getMessageHistory = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+// --- NEW: Handle typing indicator ---
+// This function emits a "typing" event to all clients in the specified chat room.
+const handleTypingIndicator = (io, chatId, userId) => {
+  io.to(chatId).emit('typing', { chatId, userId });
 };
 
 module.exports = {
@@ -418,5 +471,13 @@ module.exports = {
   addReaction,
   getMessageHistory,
   handleTypingIndicator,
-  handleBlockUser
+  handleBlockUser: (req, res) => {
+    // Simple block user implementation
+    Block.create({
+      blocker: req.user._id,
+      blocked: req.params.userId
+    })
+      .then(() => res.status(200).json({ success: true, message: 'User blocked' }))
+      .catch((error) => res.status(500).json({ success: false, message: error.message }));
+  }
 };
