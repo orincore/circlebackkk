@@ -145,9 +145,15 @@ io.on('connection', (socket) => {
     console.log(`\n[ACCEPT MATCH] User ${userId} accepted match for ${chatId}`);
     const result = await handleMatchAcceptance(chatId, userId);
     if (result.success && result.chat) {
-      // Both accepted—notify both users
+      // Both accepted—update activeUsers status to 'in_chat' and notify both users
       const userAId = result.chat.participants[0].toString();
       const userBId = result.chat.participants[1].toString();
+      if (activeUsers.has(userAId)) {
+        activeUsers.set(userAId, { ...activeUsers.get(userAId), status: 'in_chat' });
+      }
+      if (activeUsers.has(userBId)) {
+        activeUsers.set(userBId, { ...activeUsers.get(userBId), status: 'in_chat' });
+      }
       const userAData = activeUsers.get(userAId);
       const userBData = activeUsers.get(userBId);
       if (userAData && userBData) {
@@ -296,7 +302,7 @@ async function handleMatchFound(userId, match) {
       activeUsers.get(userId).chatPreference
     );
     console.log(`[CHAT CREATED] ID: ${chatId}`);
-    // Set both users to 'pending' until they respond
+    // Set both users to 'pending' until they respond (will be updated to in_chat after acceptance)
     activeUsers.set(userId.toString(), { ...activeUsers.get(userId), status: 'pending' });
     activeUsers.set(match.id, { ...match, status: 'pending' });
     console.log(`[STATUS UPDATE] ${userId} and ${match.id} marked 'pending'`);
