@@ -144,18 +144,20 @@ io.on('connection', (socket) => {
 socket.on('accept-match', async ({ chatId, userId }) => {
   console.log(`\n[ACCEPT MATCH] User ${userId} accepted match for ${chatId}`);
   const result = await handleMatchAcceptance(chatId, userId);
-  if (result.success && result.chat) {
-    // Both accepted—update activeUsers status to 'in_chat' and notify both users.
-    const userAId = result.chat.participants[0].toString();
-    const userBId = result.chat.participants[1].toString();
+  if (result.success && (result.chat || result.status === 'already_created')) {
+    // Use the chat from result.chat if available, or fallback to chatId.
+    const confirmedChat = result.chat ? result.chat : await Chat.findById(chatId);
+    const userAId = confirmedChat.participants[0].toString();
+    const userBId = confirmedChat.participants[1].toString();
+    // Update both users' status to 'in_chat'
     activeUsers.set(userAId, { ...activeUsers.get(userAId), status: 'in_chat' });
     activeUsers.set(userBId, { ...activeUsers.get(userBId), status: 'in_chat' });
     const userAData = activeUsers.get(userAId);
     const userBData = activeUsers.get(userBId);
     if (userAData && userBData) {
-      io.to(userAData.socketId).emit('match-confirmed', { chatId: result.chat._id });
-      io.to(userBData.socketId).emit('match-confirmed', { chatId: result.chat._id });
-      console.log(`[MATCH CONFIRMED] Chat ${result.chat._id} started for ${userAId} and ${userBId}`);
+      io.to(userAData.socketId).emit('match-confirmed', { chatId: confirmedChat._id });
+      io.to(userBData.socketId).emit('match-confirmed', { chatId: confirmedChat._id });
+      console.log(`[MATCH CONFIRMED] Chat ${confirmedChat._id} started for ${userAId} and ${userBId}`);
     }
   } else if (result.success && result.status === 'pending') {
     console.log(`[MATCH PENDING] Waiting for other user response for ${chatId}`);
@@ -164,6 +166,7 @@ socket.on('accept-match', async ({ chatId, userId }) => {
     io.to(socket.id).emit('match-rejected', { chatId });
   }
 });
+
 
 // Reject match handler remains unchanged.
 socket.on('reject-match', async ({ chatId, userId }) => {
