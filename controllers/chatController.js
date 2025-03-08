@@ -115,7 +115,6 @@ const handleMatchAcceptance = async (chatId, userId) => {
     match.acceptances.push(userId);
     pendingMatches.set(chatId, match);
 
-    // Check if both users have accepted
     if (match.acceptances.length === 2) {
       const chat = await Chat.create({
         participants: match.users,
@@ -134,25 +133,27 @@ const handleMatchAcceptance = async (chatId, userId) => {
         { new: true, runValidators: true }
       );
 
-      // Update activeUsers map
-      match.users.forEach(userId => {
-        const userEntry = activeUsers.get(userId.toString());
-        if (userEntry) {
-          userEntry.status = 'in_chat';
-          userEntry.activeChat = chat._id;
-        }
-      });
+      // Get user data for socket emission
+      const userA = await User.findById(match.users[0]);
+      const userB = await User.findById(match.users[1]);
 
-      // Emit confirmation to both users
-      const [userA, userB] = await User.find({ _id: { $in: match.users } });
-      io.to(match.users[0].socketId).emit('match-confirmed', { 
-        chatId: chat._id,
-        partner: userB 
-      });
-      io.to(match.users[1].socketId).emit('match-confirmed', { 
-        chatId: chat._id,
-        partner: userA 
-      });
+      // Retrieve socket IDs from activeUsers
+      const userASocket = activeUsers.get(match.users[0])?.socketId;
+      const userBSocket = activeUsers.get(match.users[1])?.socketId;
+
+      // Emit match-confirmed to both users
+      if (userASocket) {
+        io.to(userASocket).emit('match-confirmed', {
+          chatId: chat._id,
+          partner: userB
+        });
+      }
+      if (userBSocket) {
+        io.to(userBSocket).emit('match-confirmed', {
+          chatId: chat._id,
+          partner: userA
+        });
+      }
 
       pendingMatches.delete(chatId);
       return { success: true, chat };
