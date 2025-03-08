@@ -63,22 +63,57 @@ router.post('/messages/:messageId/reactions', addReaction); // Add a reaction to
 // Matchmaking routes
 router.post('/start-search', async (req, res) => {
   try {
-    const result = await initiateMatchmaking(req.user._id);
+    const userId = req.user._id;
+
+    // Check if the user is already in a chat
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    if (user.chatStatus === 'in_chat') {
+      return res.status(400).json({
+        success: false,
+        message: 'You are already in an active chat. Please end the current chat before starting a new search.',
+      });
+    }
+
+    // Check if the user is already searching
+    if (user.chatStatus === 'searching') {
+      return res.status(400).json({
+        success: false,
+        message: 'You are already searching for a match. Please wait or cancel the current search.',
+      });
+    }
+
+    // Initiate matchmaking
+    const result = await initiateMatchmaking(userId);
     if (!result.success) {
       return res.status(400).json({
         success: false,
-        message: result.error
+        message: result.error,
       });
     }
+
+    // Update user status to 'searching'
+    await User.findByIdAndUpdate(userId, {
+      chatStatus: 'searching',
+      lastActive: new Date(),
+    });
+
     res.status(200).json({
       success: true,
       message: 'Search started',
-      user: result.user
+      user: result.user,
     });
   } catch (error) {
+    console.error('[START-SEARCH ERROR]', error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message || 'Internal server error',
     });
   }
 });
