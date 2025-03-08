@@ -118,7 +118,7 @@ io.on('connection', (socket) => {
             console.log(`[MATCH FOUND] For ${userId}:`, match.id);
             clearInterval(interval);
             matchIntervals.delete(userId.toString());
-            dleMatchFound(userId, match);
+            handleMatchFound(userId, match);
           } else {
             console.log(`[NO MATCH] No matches found for ${userId} this cycle`);
           }
