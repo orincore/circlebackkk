@@ -16,7 +16,7 @@ const getChats = async (req, res) => {
     })
       .populate({
         path: 'participants',
-        select: 'firstName lastName username profileCreatedAt interests gender location online'
+        select: 'firstName lastName username profileCreatedAt interests gender location online chatStatus'
       })
       .populate({
         path: 'lastMessage',
@@ -47,7 +47,7 @@ const getChatById = async (req, res) => {
     })
       .populate({
         path: 'participants',
-        select: 'firstName lastName username profileCreatedAt interests gender location online'
+        select: 'firstName lastName username profileCreatedAt interests gender location online chatStatus'
       });
 
     if (!chat) {
@@ -105,7 +105,8 @@ const createChatSession = async (user1Id, user2Id, chatType) => {
 const handleMatchAcceptance = async (chatId, userId) => {
   try {
     let match = pendingMatches.get(chatId);
-    // If match not found, try to fetch the already created chat.
+
+    // If match not found, try to fetch the already created chat
     if (!match) {
       const chat = await Chat.findOne({ _id: chatId });
       if (chat) {
@@ -114,52 +115,54 @@ const handleMatchAcceptance = async (chatId, userId) => {
       return { success: false, error: 'Match expired' };
     }
 
-    // Record acceptance if not already responded.
+    // Record acceptance if not already responded
     if (!match.acceptances.includes(userId) && !match.rejections.includes(userId)) {
       match.acceptances.push(userId);
       pendingMatches.set(chatId, match);
     }
-    
-    console.log(`[ACCEPTANCE COUNT] Chat ${chatId}: ${match.acceptances.length} acceptance(s)`);
-    
+
     // Set both users' chatStatus to 'pending'
     await User.updateMany(
       { _id: { $in: match.users } },
       { chatStatus: 'pending' }
     );
-    
+
     const totalResponses = match.acceptances.length + match.rejections.length;
     if (totalResponses < 2) {
       return { success: true, status: 'pending' };
+    }
+
+    if (match.acceptances.length === 2) {
+      // Both accepted – create the chat session
+      const chat = await Chat.create({
+        participants: match.users,
+        chatType: 'random',
+        isActive: true
+      });
+
+      // Update user statuses to 'in_chat' and set online
+      await User.updateMany(
+        { _id: { $in: match.users } },
+        { chatStatus: 'in_chat', online: true, lastActive: Date.now() }
+      );
+
+      // Clear from pendingMatches
+      pendingMatches.delete(chatId);
+
+      return { success: true, chat };
     } else {
-      if (match.acceptances.length === 2) {
-        // Both accepted – create the chat session.
-        const chat = await Chat.create({
-          participants: match.users,
-          chatType: 'random',
-          isActive: true
-        });
-        await User.updateMany(
-          { _id: { $in: match.users } },
-          { chatStatus: 'in_chat' }
-        );
-        pendingMatches.delete(chatId);
-        return { success: true, chat };
-      } else {
-        // At least one rejection – cancel the match.
-        await User.updateMany(
-          { _id: { $in: match.users } },
-          { chatStatus: 'online' }
-        );
-        pendingMatches.delete(chatId);
-        return { success: false, status: 'rejected' };
-      }
+      // At least one rejection – cancel the match
+      await User.updateMany(
+        { _id: { $in: match.users } },
+        { chatStatus: 'online' }
+      );
+      pendingMatches.delete(chatId);
+      return { success: false, status: 'rejected' };
     }
   } catch (error) {
     return { success: false, error: error.message };
   }
 };
-
 
 // Handle match rejection
 const handleMatchRejection = async (chatId, userId) => {
@@ -171,6 +174,7 @@ const handleMatchRejection = async (chatId, userId) => {
     if (match.rejections.includes(userId) || match.acceptances.includes(userId)) {
       return { success: true, status: 'pending' };
     }
+
     match.rejections.push(userId);
     pendingMatches.set(chatId, match);
 
@@ -200,6 +204,12 @@ const handleMatchRejection = async (chatId, userId) => {
 // Enhanced message handler with read receipts
 const handleMessage = async ({ chatId, senderId, content }) => {
   try {
+    // Validate chat status
+    const chat = await Chat.findById(chatId);
+    if (!chat?.isActive) {
+      return { success: false, error: 'Chat is not active' };
+    }
+
     const newMessage = await Message.create({
       chat: chatId,
       sender: senderId,
@@ -233,7 +243,7 @@ const handleMessage = async ({ chatId, senderId, content }) => {
   }
 };
 
-// Enhanced matchmaking initialization: sets user status to searching
+// Enhanced matchmaking initialization
 const initiateMatchmaking = async (userId) => {
   try {
     const user = await User.findByIdAndUpdate(
@@ -245,6 +255,15 @@ const initiateMatchmaking = async (userId) => {
       },
       { new: true }
     );
+
+    // Prevent duplicate searches
+    if (user.chatStatus === 'in_chat') {
+      return {
+        success: false,
+        error: 'User already in active chat'
+      };
+    }
+
     return {
       success: true,
       user: {
@@ -339,129 +358,130 @@ const endRandomChat = async (req, res) => {
   }
 };
 
-// New Features: searchMessages, editMessage, deleteMessage, archiveChat, addReaction
-
 const searchMessages = async (req, res) => {
-  try {
-    const { query } = req.query;
-    const messages = await Message.find({
-      chat: req.params.chatId,
-      content: { $regex: query, $options: 'i' }
-    })
-      .populate('sender', 'username')
-      .limit(50);
-
-    res.status(200).json({
-      success: true,
-      count: messages.length,
-      data: messages
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-const editMessage = async (req, res) => {
-  try {
-    const message = await Message.findOneAndUpdate(
-      { _id: req.params.messageId, sender: req.user._id },
-      { content: req.body.content, edited: true },
-      { new: true }
-    ).populate('sender', 'username');
-
-    if (!message)
-      return res.status(404).json({ success: false, message: 'Message not found' });
-
-    res.status(200).json({ success: true, data: message });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-const deleteMessage = async (req, res) => {
-  try {
-    const message = await Message.findOneAndDelete({
-      _id: req.params.messageId,
-      sender: req.user._id
-    });
-
-    if (!message)
-      return res.status(404).json({ success: false, message: 'Message not found' });
-
-    res.status(200).json({ success: true, message: 'Message deleted' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-const archiveChat = async (req, res) => {
-  try {
-    const chat = await Chat.findOneAndUpdate(
-      { _id: req.params.chatId, participants: req.user._id },
-      { isArchived: true },
-      { new: true }
-    );
-    res.status(200).json({ success: true, data: chat });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-const addReaction = async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    const { emoji } = req.body;
-    const message = await Message.findByIdAndUpdate(
-      messageId,
-      { $push: { reactions: { emoji, userId: req.user._id } } },
-      { new: true }
-    ).populate('sender', 'username avatar');
-
-    if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found'
+    try {
+      const { query } = req.query;
+      const messages = await Message.find({
+        chat: req.params.chatId,
+        content: { $regex: query, $options: 'i' }
+      })
+        .populate('sender', 'username')
+        .limit(50);
+  
+      res.status(200).json({
+        success: true,
+        count: messages.length,
+        data: messages
       });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
     }
-
-    res.status(200).json({
-      success: true,
-      data: message
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// Updated getChatMessages with pagination
-const getMessageHistory = async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
-    const skip = (page - 1) * limit;
-    const messages = await Message.find({ chat: req.params.chatId })
-      .skip(skip)
-      .limit(limit)
-      .populate('sender', 'username')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: messages.length,
-      page,
-      totalPages: Math.ceil(await Message.countDocuments({ chat: req.params.chatId }) / limit),
-      data: messages
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// --- NEW: Handle typing indicator ---
-// This function emits a "typing" event to all clients in the specified chat room.
-const handleTypingIndicator = (io, chatId, userId) => {
-  io.to(chatId).emit('typing', { chatId, userId });
-};
+  };
+  
+  const editMessage = async (req, res) => {
+    try {
+      const message = await Message.findOneAndUpdate(
+        { _id: req.params.messageId, sender: req.user._id },
+        { content: req.body.content, edited: true },
+        { new: true }
+      ).populate('sender', 'username');
+  
+      if (!message)
+        return res.status(404).json({ success: false, message: 'Message not found' });
+  
+      res.status(200).json({ success: true, data: message });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  };
+  
+  const deleteMessage = async (req, res) => {
+    try {
+      const message = await Message.findOneAndDelete({
+        _id: req.params.messageId,
+        sender: req.user._id
+      });
+  
+      if (!message)
+        return res.status(404).json({ success: false, message: 'Message not found' });
+  
+      res.status(200).json({ success: true, message: 'Message deleted' });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  };
+  
+  const archiveChat = async (req, res) => {
+    try {
+      const chat = await Chat.findOneAndUpdate(
+        { _id: req.params.chatId, participants: req.user._id },
+        { isArchived: true },
+        { new: true }
+      );
+      res.status(200).json({ success: true, data: chat });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  };
+  
+  const addReaction = async (req, res) => {
+    try {
+      const { messageId } = req.params;
+      const { emoji } = req.body;
+      const message = await Message.findByIdAndUpdate(
+        messageId,
+        { $push: { reactions: { emoji, userId: req.user._id } } },
+        { new: true }
+      ).populate('sender', 'username avatar');
+  
+      if (!message) {
+        return res.status(404).json({
+          success: false,
+          message: 'Message not found'
+        });
+      }
+  
+      res.status(200).json({
+        success: true,
+        data: message
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  };
+  
+  // Updated getChatMessages with pagination
+  const getMessageHistory = async (req, res) => {
+    try {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 50;
+      const skip = (page - 1) * limit;
+      const messages = await Message.find({ chat: req.params.chatId })
+        .skip(skip)
+        .limit(limit)
+        .populate('sender', 'username')
+        .sort({ createdAt: -1 });
+  
+      res.status(200).json({
+        success: true,
+        count: messages.length,
+        page,
+        totalPages: Math.ceil(await Message.countDocuments({ chat: req.params.chatId }) / limit),
+        data: messages
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  };
+  
+  // --- NEW: Handle typing indicator ---
+  // This function emits a "typing" event to all clients in the specified chat room.
+  const handleTypingIndicator = (io, chatId, userId) => {
+    io.to(chatId).emit('typing', { chatId, userId });
+  };
+  
+// Other functions (searchMessages, editMessage, deleteMessage, archiveChat, addReaction, getMessageHistory, handleTypingIndicator, handleBlockUser)
+// ... (keep the existing implementations for these functions)
 
 module.exports = {
   getChats,
@@ -481,12 +501,12 @@ module.exports = {
   getMessageHistory,
   handleTypingIndicator,
   handleBlockUser: (req, res) => {
-    // Simple block user implementation
-    Block.create({
-      blocker: req.user._id,
-      blocked: req.params.userId
-    })
-      .then(() => res.status(200).json({ success: true, message: 'User blocked' }))
-      .catch((error) => res.status(500).json({ success: false, message: error.message }));
-  }
+      // Simple block user implementation
+      Block.create({
+        blocker: req.user._id,
+        blocked: req.params.userId
+      })
+        .then(() => res.status(200).json({ success: true, message: 'User blocked' }))
+        .catch((error) => res.status(500).json({ success: false, message: error.message }));
+    }
 };
