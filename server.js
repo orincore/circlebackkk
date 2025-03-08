@@ -54,6 +54,12 @@ const matchIntervals = new Map();
 io.on('connection', (socket) => {
   console.log(`\n[CONNECTION] New connection: ${socket.id}`);
 
+  // Chat room management handler
+  socket.on("join-chat", ({ chatId, userId }) => {
+    socket.join(chatId);
+    console.log(`User ${userId} joined chat ${chatId}`);
+  });
+
   // Authentication handler
   socket.on('authenticate', async ({ userId }) => {
     try {
@@ -209,18 +215,11 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const receiverId = result.receiverId.toString();
-      const receiverData = activeUsers.get(receiverId);
-
-      if (receiverData) {
-        console.log(`[MESSAGE ROUTED] To ${receiverId} (${receiverData.socketId})`);
-        io.to(receiverData.socketId).emit('new-message', {
-          chatId,
-          message: result.message,
-        });
-      } else {
-        console.log(`[MESSAGE FAILED] Receiver ${receiverId} offline`);
-      }
+      // Broadcast to entire chat room
+      io.to(chatId).emit('new-message', {
+        chatId,
+        message: result.message
+      });
     } catch (error) {
       console.error('[MESSAGE ERROR]', error);
     }
@@ -406,21 +405,6 @@ function cleanupSearch(userId) {
   activeUsers.delete(userId.toString());
   console.log(`[CLEANUP COMPLETE] For ${userId}`);
 }
-
-// Add chat room management
-socket.on("join-chat", ({ chatId, userId }) => {
-  socket.join(chatId);
-  console.log(`User ${userId} joined chat ${chatId}`);
-});
-
-// Update message handler
-socket.on("send-message", async (data) => {
-  const message = await handleMessage(data);
-  if (message.success) {
-    // Broadcast to entire chat room
-    io.to(data.chatId).emit("new-message", message);
-  }
-});
 
 // --- Routes ---
 app.use('/api/auth', require('./routes/authRoutes'));
