@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 const chatSchema = new mongoose.Schema({
   participants: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    required: true
   }],
   chatType: {
     type: String,
@@ -17,11 +18,21 @@ const chatSchema = new mongoose.Schema({
   lastMessage: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Message'
+  },
+  unreadCount: {
+    type: Number,
+    default: 0
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
-const Chat = mongoose.model('Chat', chatSchema);
+chatSchema.virtual('messages', {
+  ref: 'Message',
+  localField: '_id',
+  foreignField: 'chat'
+});
 
-module.exports = Chat;
+module.exports = mongoose.model('Chat', chatSchema);
