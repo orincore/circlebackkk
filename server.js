@@ -302,10 +302,22 @@ async function handleMatchFound(userId, match) {
       activeUsers.get(userId).chatPreference
     );
     console.log(`[CHAT CREATED] ID: ${chatId}`);
+
+    // Clear matchmaking intervals for both users if they exist.
+    if (matchIntervals.has(userId.toString())) {
+      clearInterval(matchIntervals.get(userId.toString()));
+      matchIntervals.delete(userId.toString());
+    }
+    if (matchIntervals.has(match.id.toString())) {
+      clearInterval(matchIntervals.get(match.id.toString()));
+      matchIntervals.delete(match.id.toString());
+    }
+
     // Set both users to 'pending' until they respond (will be updated to in_chat after acceptance)
     activeUsers.set(userId.toString(), { ...activeUsers.get(userId), status: 'pending' });
     activeUsers.set(match.id, { ...match, status: 'pending' });
     console.log(`[STATUS UPDATE] ${userId} and ${match.id} marked 'pending'`);
+
     // Retrieve user details for notification
     const [userA, userB] = await Promise.all([
       User.findById(userId),
