@@ -255,23 +255,30 @@ const handleMatchResponse = async (io, chatId, userId, isAccept) => {
       let result;
       
       if (match.acceptances.length === 2) {
-        // Get both users' preferences
+        // Get both users' data
         const [user1, user2] = await Promise.all([
-            User.findById(match.users[0]),
-            User.findById(match.users[1])
+          User.findById(match.users[0]),
+          User.findById(match.users[1])
         ]);
-    
-        // Verify preferences match
+
+        // Verify matching preferences
         if (user1.chatPreference !== user2.chatPreference) {
-            throw new Error('Mismatched chat preferences');
+          throw new Error('Mismatched chat preferences');
         }
-    
+
         // Create chat with correct type
         const chat = await Chat.create({
-            participants: match.users,
-            chatType: user1.chatPreference, // Use the common preference
-            isActive: true
-        });    
+          participants: match.users,
+          chatType: user1.chatPreference, // Use the common preference
+          isActive: true
+        }).catch(error => {
+          console.error('[CHAT CREATION ERROR]', error);
+          throw new Error('Failed to create chat');
+        });
+
+        if (!chat) {
+          throw new Error('Chat creation failed');
+        }
 
         // Update users
         await User.updateMany(
@@ -282,7 +289,7 @@ const handleMatchResponse = async (io, chatId, userId, isAccept) => {
           }
         );
 
-        // Update activeUsers
+        // Update activeUsers status
         match.users.forEach(userId => {
           const entry = activeUsers.get(userId);
           if (entry) entry.status = 'in_chat';
@@ -302,15 +309,21 @@ const handleMatchResponse = async (io, chatId, userId, isAccept) => {
     }
     return { success: true, status: 'pending' };
   } catch (error) {
+    console.error('[MATCH RESPONSE ERROR]', error);
     throw error;
   }
 };
 
 const handleMatchResult = (result, chatId) => {
-  if (result.success) {
+  if (result.success && result.chat) { // Add null check for result.chat
     io.to(chatId).emit('match-confirmed', {
       chatId,
       participants: result.chat.participants
+    });
+  } else if (result.success) {
+    console.error('[MATCH ERROR] Chat creation failed for', chatId);
+    io.to(chatId).emit('match-error', { 
+      message: 'Failed to create chat session' 
     });
   } else {
     io.to(chatId).emit('match-rejected', { chatId });
