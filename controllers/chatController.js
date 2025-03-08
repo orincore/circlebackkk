@@ -338,5 +338,171 @@ module.exports = {
         })
           .then(() => res.status(200).json({ success: true, message: 'User blocked' }))
           .catch((error) => res.status(500).json({ success: false, message: error.message }));
-      }
+      },
+      getMessageHistory: async (req, res) => {
+        try {
+          const { page = 1, limit = 50 } = req.query;
+          const skip = (page - 1) * limit;
+      
+          const messages = await Message.find({ chat: req.params.chatId })
+            .populate('sender', 'username avatar')
+            .sort('-createdAt')
+            .skip(skip)
+            .limit(limit);
+      
+          res.status(200).json({
+            success: true,
+            count: messages.length,
+            page: Number(page),
+            data: messages
+          });
+        } catch (error) {
+          res.status(500).json({
+            success: false,
+            message: error.message
+          });
+        }
+      },
+
+// ==================== CHAT SESSION MANAGEMENT ====================
+createChatSession: async (io, user1Id, user2Id, chatType) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
+  try {
+    // Check for existing chat
+    const existingChat = await Chat.findOne({
+      participants: { $all: [user1Id, user2Id] },
+      chatType
+    }).session(session);
+
+    if (existingChat) {
+      await session.abortTransaction();
+      return { success: true, chat: existingChat };
+    }
+
+    // Create new chat
+    const newChat = await Chat.create([{
+      participants: [user1Id, user2Id],
+      chatType,
+      isActive: true
+    }], { session });
+
+    await session.commitTransaction();
+    return { success: true, chat: newChat[0] };
+    
+  } catch (error) {
+    await session.abortTransaction();
+    return { success: false, error: error.message };
+  } finally {
+    session.endSession();
+  }
+},
+
+// ==================== MESSAGE MANAGEMENT ====================
+editMessage: async (req, res) => {
+  try {
+    const message = await Message.findOneAndUpdate(
+      { 
+        _id: req.params.messageId,
+        sender: req.user._id 
+      },
+      { 
+        content: req.body.content,
+        edited: true,
+        editedAt: new Date()
+      },
+      { new: true }
+    ).populate('sender', 'username avatar');
+
+    if (!message) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Message not found or unauthorized' 
+      });
+    }
+
+    res.status(200).json({ success: true, data: message });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+},
+
+deleteMessage: async (req, res) => {
+  try {
+    const message = await Message.findOneAndDelete({
+      _id: req.params.messageId,
+      sender: req.user._id
+    });
+
+    if (!message) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Message not found or unauthorized' 
+      });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'Message deleted successfully' 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+},
+
+// ==================== CHAT ACTIONS ====================
+archiveChat: async (req, res) => {
+  try {
+    const chat = await Chat.findOneAndUpdate(
+      { 
+        _id: req.params.chatId,
+        participants: req.user._id 
+      },
+      { isArchived: true },
+      { new: true }
+    ).populate('participants', 'username avatar');
+
+    if (!chat) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Chat not found' 
+      });
+    }
+
+    res.status(200).json({ success: true, data: chat });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+},
+
+// ==================== REACTIONS ====================
+addReaction: async (req, res) => {
+  try {
+    const message = await Message.findByIdAndUpdate(
+      req.params.messageId,
+      {
+        $push: {
+          reactions: {
+            emoji: req.body.emoji,
+            user: req.user._id
+          }
+        }
+      },
+      { new: true }
+    ).populate('reactions.user', 'username');
+
+    if (!message) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Message not found' 
+      });
+    }
+
+    res.status(200).json({ success: true, data: message });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
 };
+
