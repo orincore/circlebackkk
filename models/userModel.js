@@ -140,6 +140,15 @@ userSchema.virtual('followingCount').get(function() {
   return this.following?.length || 0;
 });
 
+userSchema.pre('save', function(next) {
+  if (this.chatPreference && this.isModified('chatPreference')) {
+    this.chatPreference = 
+      this.chatPreference.charAt(0).toUpperCase() + 
+      this.chatPreference.slice(1).toLowerCase();
+  }
+  next();
+});
+
 // Add instance method for follow functionality
 userSchema.methods.followUser = async function(userId) {
   if (!this.following.includes(userId)) {
