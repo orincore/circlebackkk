@@ -407,6 +407,21 @@ function cleanupSearch(userId) {
   console.log(`[CLEANUP COMPLETE] For ${userId}`);
 }
 
+// Add chat room management
+socket.on("join-chat", ({ chatId, userId }) => {
+  socket.join(chatId);
+  console.log(`User ${userId} joined chat ${chatId}`);
+});
+
+// Update message handler
+socket.on("send-message", async (data) => {
+  const message = await handleMessage(data);
+  if (message.success) {
+    // Broadcast to entire chat room
+    io.to(data.chatId).emit("new-message", message);
+  }
+});
+
 // --- Routes ---
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/chat', require('./routes/chatRoutes'));
