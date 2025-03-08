@@ -7,6 +7,7 @@ const cors = require('cors');
 const { connectDB } = require('./config/db');
 const User = require('./models/userModel');
 const Chat = require('./models/chatModel');
+const Message = require('./models/messageModel'); // Ensure this model exists
 
 dotenv.config();
 
@@ -16,7 +17,8 @@ const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE']
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
   }
 });
 
@@ -36,6 +38,12 @@ const pendingMatches = new Map();
 // ==================== WebSocket Handlers ====================
 io.on('connection', (socket) => {
   console.log(`\n[CONNECTION] New connection: ${socket.id}`);
+
+  // Add chat room joining handler
+  socket.on('join-chat', (chatId) => {
+    console.log(`[SOCKET JOIN] ${socket.id} joining chat ${chatId}`);
+    socket.join(chatId);
+  });
 
   // Authentication handler
   socket.on('authenticate', async (userId) => {
@@ -146,17 +154,42 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Message handler
+  // Message handler - fixed version
   socket.on('send-message', async ({ chatId, senderId, content }) => {
     try {
       console.log(`[MESSAGE] Received in ${chatId} from ${senderId}`);
-      const result = await handleMessage(io, { chatId, senderId, content });
-      if (result.success) {
-        io.to(chatId).emit('new-message', result.message);
+      
+      // Validate input
+      if (!content || !chatId || !senderId) {
+        throw new Error('Missing message parameters');
       }
+
+      // Create message in database
+      const message = await Message.create({
+        content,
+        sender: senderId,
+        chat: chatId
+      });
+
+      // Populate sender information
+      const populatedMessage = await Message.populate(message, {
+        path: 'sender',
+        select: 'username avatar'
+      });
+
+      // Verify chat exists
+      const chat = await Chat.findById(chatId);
+      if (!chat) {
+        throw new Error('Chat not found');
+      }
+
+      // Send message to room
+      console.log(`[MESSAGE BROADCAST] To chat ${chatId}`);
+      io.to(chatId).emit('new-message', populatedMessage);
+
     } catch (error) {
       console.error('[MESSAGE ERROR]', error);
-      socket.emit('message-error', 'Failed to send message');
+      socket.emit('message-error', error.message);
     }
   });
 
@@ -384,6 +417,15 @@ const handleMatchResult = (result, chatId) => {
     console.log(`[HANDLE MATCH RESULT] For chat ${chatId}, Success: ${result.success}`);
     if (result.success && result.chat) {
       console.log(`[MATCH CONFIRMED] Chat ${chatId}`);
+      
+      // Notify both users to join the chat room
+      result.chat.participants.forEach(userId => {
+        const userData = activeUsers.get(userId);
+        if (userData) {
+          io.to(userData.socketId).emit('join-chat-room', chatId);
+        }
+      });
+
       io.to(chatId).emit('match-confirmed', {
         chatId,
         participants: result.chat.participants
