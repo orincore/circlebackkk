@@ -17,6 +17,7 @@ const {
   handleTypingIndicator
 } = require('../controllers/chatController');
 const { protect } = require('../middleware/authMiddleware');
+const Chat = require('../models/chatModel'); // Added missing Chat model import
 
 // Apply auth middleware to all routes
 router.use(protect);
@@ -57,7 +58,8 @@ router.post('/messages/:messageId/reactions', addReaction);
 // ==================== Matchmaking Routes ====================
 router.post('/start-search', async (req, res) => {
   try {
-    const result = await initiateMatchmaking(req.user._id);
+    const io = req.app.get('socketio'); // Get io instance
+    const result = await initiateMatchmaking(io, req.user._id); // Pass io to controller
     
     if (!result.success) {
       return res.status(400).json(result);
@@ -78,7 +80,9 @@ router.post('/start-search', async (req, res) => {
 
 router.post('/create-session', async (req, res) => {
   try {
+    const io = req.app.get('socketio'); // Get io instance
     const result = await createChatSession(
+      io, // Pass io to controller
       req.user._id,
       req.body.participantId,
       req.body.chatType || 'random'
