@@ -104,28 +104,29 @@ const createChatSession = async (user1Id, user2Id, chatType) => {
 // Handle match acceptance
 const handleMatchAcceptance = async (chatId, userId) => {
   try {
-    const match = pendingMatches.get(chatId);
+    let match = pendingMatches.get(chatId);
     if (!match) return { success: false, error: 'Match expired' };
 
-    // Prevent duplicate responses
-    if (match.acceptances.includes(userId) || match.rejections.includes(userId)) {
-      return { success: true, status: 'pending' };
+    // If the user hasn't responded yet, record the acceptance.
+    if (!match.acceptances.includes(userId) && !match.rejections.includes(userId)) {
+      match.acceptances.push(userId);
+      pendingMatches.set(chatId, match);
     }
-    match.acceptances.push(userId);
-    pendingMatches.set(chatId, match);
+    
+    console.log(`[ACCEPTANCE COUNT] Chat ${chatId}: ${match.acceptances.length} acceptance(s)`);
 
-    // Update both users' chatStatus to 'pending'
+    // Update both users' chatStatus to 'pending' while waiting for both responses.
     await User.updateMany(
       { _id: { $in: match.users } },
       { chatStatus: 'pending' }
     );
-
+    
     const totalResponses = match.acceptances.length + match.rejections.length;
     if (totalResponses < 2) {
       return { success: true, status: 'pending' };
     } else {
       if (match.acceptances.length === 2) {
-        // Both accepted: create the chat session
+        // Both users accepted – create the chat session.
         const chat = await Chat.create({
           participants: match.users,
           chatType: 'random',
@@ -138,7 +139,7 @@ const handleMatchAcceptance = async (chatId, userId) => {
         pendingMatches.delete(chatId);
         return { success: true, chat };
       } else {
-        // At least one rejection
+        // At least one rejection – cancel the match.
         await User.updateMany(
           { _id: { $in: match.users } },
           { chatStatus: 'online' }
