@@ -255,12 +255,23 @@ const handleMatchResponse = async (io, chatId, userId, isAccept) => {
       let result;
       
       if (match.acceptances.length === 2) {
-        // Create chat
+        // Get both users' preferences
+        const [user1, user2] = await Promise.all([
+            User.findById(match.users[0]),
+            User.findById(match.users[1])
+        ]);
+    
+        // Verify preferences match
+        if (user1.chatPreference !== user2.chatPreference) {
+            throw new Error('Mismatched chat preferences');
+        }
+    
+        // Create chat with correct type
         const chat = await Chat.create({
-          participants: match.users,
-          chatType: 'random',
-          isActive: true
-        });
+            participants: match.users,
+            chatType: user1.chatPreference, // Use the common preference
+            isActive: true
+        });    
 
         // Update users
         await User.updateMany(
