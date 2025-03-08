@@ -118,7 +118,7 @@ io.on('connection', (socket) => {
             console.log(`[MATCH FOUND] For ${userId}:`, match.id);
             clearInterval(interval);
             matchIntervals.delete(userId.toString());
-            handleMatchFound(userId, match);
+            dleMatchFound(userId, match);
           } else {
             console.log(`[NO MATCH] No matches found for ${userId} this cycle`);
           }
@@ -133,7 +133,7 @@ io.on('connection', (socket) => {
         console.log(`\n[CLEANUP] Initiating for ${userId}`);
         cleanupSearch(userId);
       };
-      socket.once('disconnect', cleanup);
+      socket.once('disconnect', chanleanup);
       socket.once('end-search', cleanup);
     } catch (error) {
       console.error('[SEARCH ERROR]', error);
@@ -289,8 +289,13 @@ async function findMatch(userId) {
 async function handleMatchFound(userId, match) {
   try {
     console.log(`\n[CHAT CREATION] Starting for ${userId} and ${match.id}`);
-    const { chat } = await createChatSession(userId, match.id, activeUsers.get(userId).chatPreference);
-    console.log(`[CHAT CREATED] ID: ${chat._id}`);
+    // Destructure chatId from createChatSession instead of chat
+    const { chatId } = await createChatSession(
+      userId,
+      match.id,
+      activeUsers.get(userId).chatPreference
+    );
+    console.log(`[CHAT CREATED] ID: ${chatId}`);
     // Set both users to 'pending' until they respond
     activeUsers.set(userId.toString(), { ...activeUsers.get(userId), status: 'pending' });
     activeUsers.set(match.id, { ...match, status: 'pending' });
@@ -304,11 +309,9 @@ async function handleMatchFound(userId, match) {
       userA: userA.username,
       userB: userB.username
     });
-    // Notify both users:
-    // One user (e.g., the one who initiated search) receives a prompt (promptUser: true),
-    // and the other is put in a waiting state (promptUser: false).
+    // Notify both users: one gets a prompt, the other waits
     io.to(activeUsers.get(userId).socketId).emit('match-found', {
-      chatId: chat._id,
+      chatId,
       user: {
         id: match.id,
         username: userB.username,
@@ -317,7 +320,7 @@ async function handleMatchFound(userId, match) {
       promptUser: true
     });
     io.to(match.socketId).emit('match-found', {
-      chatId: chat._id,
+      chatId,
       user: {
         id: userId,
         username: userA.username,
@@ -326,25 +329,13 @@ async function handleMatchFound(userId, match) {
       promptUser: false
     });
     console.log(`[MATCH COMPLETE] Successfully paired ${userId} and ${match.id}`);
-    return chat;
+    return { _id: chatId };
   } catch (error) {
     console.error('[MATCH HANDLING ERROR]', error);
     throw error;
   }
 }
 
-// --- Cleanup function ---
-function cleanupSearch(userId) {
-  console.log(`\n[CLEANUP] Starting for ${userId}`);
-  const interval = matchIntervals.get(userId.toString());
-  if (interval) {
-    console.log(`[CLEANUP] Clearing interval for ${userId}`);
-    clearInterval(interval);
-  }
-  matchIntervals.delete(userId.toString());
-  activeUsers.delete(userId.toString());
-  console.log(`[CLEANUP COMPLETE] For ${userId}`);
-}
 
 // --- Routes ---
 app.use('/api/auth', require('./routes/authRoutes'));
