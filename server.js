@@ -140,34 +140,22 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Accept match handler
+// Accept match handler
 socket.on('accept-match', async ({ chatId, userId }) => {
   console.log(`\n[ACCEPT MATCH] User ${userId} accepted match for ${chatId}`);
   const result = await handleMatchAcceptance(chatId, userId);
-  if (result.success && (result.chat || result.status === 'already_created')) {
-    // Determine confirmed chat id (either from result.chat or fallback to chatId)
-    const confirmedChatId = result.chat ? result.chat._id : chatId;
-    // If available, update both users' status to 'in_chat'
-    if (result.chat && result.chat.participants) {
-      const userAId = result.chat.participants[0].toString();
-      const userBId = result.chat.participants[1].toString();
-      if (activeUsers.has(userAId)) {
-        activeUsers.set(userAId, { ...activeUsers.get(userAId), status: 'in_chat' });
-      }
-      if (activeUsers.has(userBId)) {
-        activeUsers.set(userBId, { ...activeUsers.get(userBId), status: 'in_chat' });
-      }
-      const userAData = activeUsers.get(userAId);
-      const userBData = activeUsers.get(userBId);
-      if (userAData && userBData) {
-        io.to(userAData.socketId).emit('match-confirmed', { chatId: confirmedChatId });
-        io.to(userBData.socketId).emit('match-confirmed', { chatId: confirmedChatId });
-        console.log(`[MATCH CONFIRMED] Chat ${confirmedChatId} started for ${userAId} and ${userBId}`);
-      }
-    } else {
-      // If participants info is missing, simply notify this socket as a fallback.
-      io.to(socket.id).emit('match-confirmed', { chatId: confirmedChatId });
-      console.log(`[MATCH CONFIRMED] Chat ${confirmedChatId} confirmed for ${userId}`);
+  if (result.success && result.chat) {
+    // Both accepted—update activeUsers status to 'in_chat' and notify both users.
+    const userAId = result.chat.participants[0].toString();
+    const userBId = result.chat.participants[1].toString();
+    activeUsers.set(userAId, { ...activeUsers.get(userAId), status: 'in_chat' });
+    activeUsers.set(userBId, { ...activeUsers.get(userBId), status: 'in_chat' });
+    const userAData = activeUsers.get(userAId);
+    const userBData = activeUsers.get(userBId);
+    if (userAData && userBData) {
+      io.to(userAData.socketId).emit('match-confirmed', { chatId: result.chat._id });
+      io.to(userBData.socketId).emit('match-confirmed', { chatId: result.chat._id });
+      console.log(`[MATCH CONFIRMED] Chat ${result.chat._id} started for ${userAId} and ${userBId}`);
     }
   } else if (result.success && result.status === 'pending') {
     console.log(`[MATCH PENDING] Waiting for other user response for ${chatId}`);
@@ -177,7 +165,7 @@ socket.on('accept-match', async ({ chatId, userId }) => {
   }
 });
 
-// Reject match handler
+// Reject match handler remains unchanged.
 socket.on('reject-match', async ({ chatId, userId }) => {
   console.log(`\n[REJECT MATCH] User ${userId} rejected match for ${chatId}`);
   const result = await handleMatchRejection(chatId, userId);
@@ -188,7 +176,6 @@ socket.on('reject-match', async ({ chatId, userId }) => {
     io.to(socket.id).emit('match-rejected', { chatId });
   }
 });
-
 
   // Message handler
   socket.on('send-message', async ({ chatId, senderId, content }) => {
