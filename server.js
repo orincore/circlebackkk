@@ -133,7 +133,7 @@ io.on('connection', (socket) => {
         console.log(`\n[CLEANUP] Initiating for ${userId}`);
         cleanupSearch(userId);
       };
-      socket.once('disconnect', chanleanup);
+      socket.once('disconnect', cleanup);
       socket.once('end-search', cleanup);
     } catch (error) {
       console.error('[SEARCH ERROR]', error);
@@ -336,6 +336,18 @@ async function handleMatchFound(userId, match) {
   }
 }
 
+// --- Cleanup function ---
+function cleanupSearch(userId) {
+  console.log(`\n[CLEANUP] Starting for ${userId}`);
+  const interval = matchIntervals.get(userId.toString());
+  if (interval) {
+    console.log(`[CLEANUP] Clearing interval for ${userId}`);
+    clearInterval(interval);
+  }
+  matchIntervals.delete(userId.toString());
+  activeUsers.delete(userId.toString());
+  console.log(`[CLEANUP COMPLETE] For ${userId}`);
+}
 
 // --- Routes ---
 app.use('/api/auth', require('./routes/authRoutes'));
