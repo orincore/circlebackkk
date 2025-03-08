@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { 
-  getChats, 
-  getChatById, 
-  getChatMessages,    // legacy route; use getMessageHistory for pagination
+  getChats,
+  getChatById,
+  getMessageHistory,
   endRandomChat,
-  initiateMatchmaking,  // Sets user status to 'searching'
+  initiateMatchmaking,
   handleMessage,
   createChatSession,
   searchMessages,
@@ -14,7 +14,6 @@ const {
   archiveChat,
   addReaction,
   handleBlockUser,
-  getMessageHistory,   // Paginated message history endpoint
   handleTypingIndicator
 } = require('../controllers/chatController');
 const { protect } = require('../middleware/authMiddleware');
@@ -22,33 +21,27 @@ const { protect } = require('../middleware/authMiddleware');
 // Apply auth middleware to all routes
 router.use(protect);
 
-// Chat routes
-router.get('/', getChats); // Get all active chats for the authenticated user
-router.get('/:chatId', getChatById); // Get specific chat details by ID
-router.get('/:chatId/messages', getMessageHistory); // Get paginated chat messages
-router.put('/:chatId/end', endRandomChat); // End an active chat session
-router.put('/:chatId/archive', archiveChat); // Archive a chat
+// ==================== Chat Routes ====================
+router.get('/', getChats);
+router.get('/:chatId', getChatById);
+router.get('/:chatId/messages', getMessageHistory);
+router.put('/:chatId/end', endRandomChat);
+router.put('/:chatId/archive', archiveChat);
 
-// Message routes
-router.get('/:chatId/messages/search', searchMessages); // Search messages within a chat
+// ==================== Message Routes ====================
+router.get('/:chatId/messages/search', searchMessages);
 router.post('/:chatId/messages', async (req, res) => {
   try {
-    const { content } = req.body;
-    const result = await handleMessage({
+    const io = req.app.get('socketio');
+    const result = await handleMessage(io, {
       chatId: req.params.chatId,
       senderId: req.user._id,
-      content
+      content: req.body.content
     });
-    if (!result.success) {
-      return res.status(400).json({
-        success: false,
-        message: result.error
-      });
-    }
-    res.status(201).json({
-      success: true,
-      message: result.message
-    });
+    
+    result.success 
+      ? res.status(201).json(result)
+      : res.status(400).json(result);
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -56,87 +49,24 @@ router.post('/:chatId/messages', async (req, res) => {
     });
   }
 });
-router.put('/messages/:messageId', editMessage); // Edit a specific message
-router.delete('/messages/:messageId', deleteMessage); // Delete a specific message
-router.post('/messages/:messageId/reactions', addReaction); // Add a reaction to a message
 
-// Matchmaking routes
+router.put('/messages/:messageId', editMessage);
+router.delete('/messages/:messageId', deleteMessage);
+router.post('/messages/:messageId/reactions', addReaction);
+
+// ==================== Matchmaking Routes ====================
 router.post('/start-search', async (req, res) => {
   try {
-    const userId = req.user._id;
-
-    // Check if the user is already in a chat
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    if (user.chatStatus === 'in_chat') {
-      return res.status(400).json({
-        success: false,
-        message: 'You are already in an active chat. Please end the current chat before starting a new search.',
-      });
-    }
-
-    // Check if the user is already searching
-    if (user.chatStatus === 'searching') {
-      return res.status(400).json({
-        success: false,
-        message: 'You are already searching for a match. Please wait or cancel the current search.',
-      });
-    }
-
-    // Initiate matchmaking
-    const result = await initiateMatchmaking(userId);
+    const result = await initiateMatchmaking(req.user._id);
+    
     if (!result.success) {
-      return res.status(400).json({
-        success: false,
-        message: result.error,
-      });
+      return res.status(400).json(result);
     }
-
-    // Update user status to 'searching'
-    await User.findByIdAndUpdate(userId, {
-      chatStatus: 'searching',
-      lastActive: new Date(),
-    });
 
     res.status(200).json({
       success: true,
-      message: 'Search started',
-      user: result.user,
-    });
-  } catch (error) {
-    console.error('[START-SEARCH ERROR]', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Internal server error',
-    });
-  }
-});
-
-// Chat session creation route (for direct chat creation based on mutual acceptance)
-router.post('/create-session', async (req, res) => {
-  try {
-    const { participantId, chatType } = req.body;
-    const result = await createChatSession(
-      req.user._id,
-      participantId,
-      chatType || req.user.chatPreference
-    );
-    if (!result.success) {
-      return res.status(400).json({
-        success: false,
-        message: result.error
-      });
-    }
-    res.status(201).json({
-      success: true,
-      chat: result.chat,
-      isNew: result.isNew || true
+      data: result.user,
+      message: 'Matchmaking started'
     });
   } catch (error) {
     res.status(500).json({
@@ -146,14 +76,49 @@ router.post('/create-session', async (req, res) => {
   }
 });
 
-// User interaction routes
-router.post('/block/:userId', handleBlockUser); // Block a user
+router.post('/create-session', async (req, res) => {
+  try {
+    const result = await createChatSession(
+      req.user._id,
+      req.body.participantId,
+      req.body.chatType || 'random'
+    );
 
-// WebSocket routes (for typing indicator)
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    const chat = await Chat.findById(result.chatId)
+      .populate('participants', 'username avatar');
+    
+    res.status(201).json({
+      success: true,
+      data: chat,
+      message: 'Chat session created'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// ==================== User Interaction Routes ====================
+router.post('/block/:userId', handleBlockUser);
+
+// ==================== WebSocket Enhanced Routes ====================
 router.post('/:chatId/typing', (req, res) => {
-  // Assuming req.io is injected via middleware in app.js
-  handleTypingIndicator(req.io, req.params.chatId, req.user._id);
-  res.status(200).json({ success: true });
+  try {
+    const io = req.app.get('socketio');
+    handleTypingIndicator(io, req.params.chatId, req.user._id);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
 });
 
 module.exports = router;
