@@ -105,7 +105,14 @@ const createChatSession = async (user1Id, user2Id, chatType) => {
 const handleMatchAcceptance = async (chatId, userId) => {
   try {
     let match = pendingMatches.get(chatId);
-    if (!match) return { success: false, error: 'Match expired' };
+    // If match not found, try to fetch the already created chat.
+    if (!match) {
+      const chat = await Chat.findOne({ _id: chatId });
+      if (chat) {
+        return { success: true, status: 'already_created', chat };
+      }
+      return { success: false, error: 'Match expired' };
+    }
 
     // Record acceptance if not already responded.
     if (!match.acceptances.includes(userId) && !match.rejections.includes(userId)) {
@@ -114,8 +121,8 @@ const handleMatchAcceptance = async (chatId, userId) => {
     }
     
     console.log(`[ACCEPTANCE COUNT] Chat ${chatId}: ${match.acceptances.length} acceptance(s)`);
-
-    // Set both users' status to pending
+    
+    // Set both users' chatStatus to 'pending'
     await User.updateMany(
       { _id: { $in: match.users } },
       { chatStatus: 'pending' }
@@ -123,35 +130,30 @@ const handleMatchAcceptance = async (chatId, userId) => {
     
     const totalResponses = match.acceptances.length + match.rejections.length;
     if (totalResponses < 2) {
-      // Wait briefly to allow the second response to arrive
-      await new Promise(resolve => setTimeout(resolve, 100));
-      match = pendingMatches.get(chatId);
-      if (match && match.acceptances.length < 2) {
-        return { success: true, status: 'pending' };
-      }
-    }
-    
-    if (match && match.acceptances.length === 2) {
-      // Both users accepted – create the chat session.
-      const chat = await Chat.create({
-        participants: match.users,
-        chatType: 'random',
-        isActive: true
-      });
-      await User.updateMany(
-        { _id: { $in: match.users } },
-        { chatStatus: 'in_chat' }
-      );
-      pendingMatches.delete(chatId);
-      return { success: true, chat };
+      return { success: true, status: 'pending' };
     } else {
-      // At least one rejection – cancel the match.
-      await User.updateMany(
-        { _id: { $in: match.users } },
-        { chatStatus: 'online' }
-      );
-      pendingMatches.delete(chatId);
-      return { success: false, status: 'rejected' };
+      if (match.acceptances.length === 2) {
+        // Both accepted – create the chat session.
+        const chat = await Chat.create({
+          participants: match.users,
+          chatType: 'random',
+          isActive: true
+        });
+        await User.updateMany(
+          { _id: { $in: match.users } },
+          { chatStatus: 'in_chat' }
+        );
+        pendingMatches.delete(chatId);
+        return { success: true, chat };
+      } else {
+        // At least one rejection – cancel the match.
+        await User.updateMany(
+          { _id: { $in: match.users } },
+          { chatStatus: 'online' }
+        );
+        pendingMatches.delete(chatId);
+        return { success: false, status: 'rejected' };
+      }
     }
   } catch (error) {
     return { success: false, error: error.message };
