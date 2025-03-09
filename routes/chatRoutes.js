@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const { 
   getChats,
@@ -35,57 +36,42 @@ router.get('/:chatId/messages/search', searchMessages);
 // Updated POST message route
 router.post('/:chatId/messages', async (req, res) => {
   try {
-    const io = req.app.get('io'); // Get the io instance from the app
-    const { content } = req.body;
     const { chatId } = req.params;
-    const senderId = req.user._id;
-
-    // Validate input
-    if (!content || !chatId || !senderId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Missing required fields" 
+    
+    if (!chatId || !mongoose.Types.ObjectId.isValid(chatId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Valid chat ID is required"
       });
     }
 
-    // Create message in database
-    const message = await handleMessage({
-      chatId,
-      senderId,
-      content
-    });
+    const result = await handleMessage(
+      req.app.get('io'),
+      {
+        chatId,
+        senderId: req.user._id,
+        content: req.body.content
+      }
+    );
 
-    // Populate sender information
-    const populatedMessage = await message.populate({
-      path: 'sender',
-      select: 'username avatar'
-    });
-
-    // Verify chat exists
-    const chat = await Chat.findById(chatId);
-    if (!chat) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Chat not found" 
-      });
+    if (!result.success) {
+      return res.status(400).json(result);
     }
-
-    // Broadcast message to room
-    io.to(chatId).emit('new-message', populatedMessage);
 
     res.status(201).json({
       success: true,
-      data: populatedMessage
+      data: result.data,
+      message: result.message
     });
 
   } catch (error) {
-    console.error('[POST MESSAGE ERROR]', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
+
 
 router.put('/messages/:messageId', editMessage);
 router.delete('/messages/:messageId', deleteMessage);
@@ -117,11 +103,18 @@ router.post('/start-search', async (req, res) => {
 
 router.post('/create-session', async (req, res) => {
   try {
-    const io = req.app.get('io'); // Get the io instance from the app
-    const { participantId, chatType = 'random' } = req.body;
+    const { participantId, chatType } = req.body;
+
+    // Validation
+    if (!participantId) {
+      return res.status(400).json({
+        success: false,
+        error: "Participant ID is required"
+      });
+    }
 
     const result = await createChatSession(
-      io,
+      req.app.get('io'),
       req.user._id,
       participantId,
       chatType
@@ -131,22 +124,20 @@ router.post('/create-session', async (req, res) => {
       return res.status(400).json(result);
     }
 
-    const chat = await Chat.findById(result.chatId)
-      .populate('participants', 'username avatar');
-
     res.status(201).json({
       success: true,
-      data: chat,
-      message: 'Chat session created'
+      data: result.data,
+      message: result.message
     });
 
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
+
 
 // ==================== User Interaction Routes ====================
 router.post('/block/:userId', handleBlockUser);
