@@ -1,48 +1,75 @@
+const mongoose = require('mongoose');
 const Chat = require('../models/chatModel');
 const Message = require('../models/messageModel');
 const User = require('../models/userModel');
 const Block = require('../models/blockModel');
-const mongoose = require('mongoose');
 
 // Shared state management
 const pendingMatches = new Map();
 const activeUsers = new Map();
 
 // ==================== Match Management ====================
-const createChatSession = async (user1Id, user2Id, chatType) => {
+const createChatSession = async (io, creatorId, participantId, chatType = 'Friendship') => {
   const session = await mongoose.startSession();
   session.startTransaction();
-  
+
   try {
-    const existing = Array.from(pendingMatches.values()).find(match => 
-      match.users.some(u => u.equals(user1Id)) && 
-      match.users.some(u => u.equals(user2Id))
-    );
-    
-    if (existing) {
-      await session.abortTransaction();
-      return { success: true, chatId: existing.chatId };
+    // Validate inputs
+    if (!mongoose.Types.ObjectId.isValid(creatorId) || 
+        !mongoose.Types.ObjectId.isValid(participantId)) {
+      throw new Error('Invalid user ID format');
     }
 
-    const chatId = new mongoose.Types.ObjectId();
-    const expiresAt = Date.now() + 120000;
-    
-    pendingMatches.set(chatId.toString(), {
-      users: [user1Id, user2Id],
-      chatId,
-      acceptances: [],
-      rejections: [],
-      expiresAt,
+    // Check for existing chat
+    const existingChat = await Chat.findOne({
+      participants: { $all: [creatorId, participantId] },
       chatType
+    }).populate('participants', 'firstName lastName username avatar');
+
+    if (existingChat) {
+      return { 
+        success: true, 
+        data: existingChat,
+        message: 'Existing chat found'
+      };
+    }
+
+    // Create new chat with population
+    const newChat = await Chat.create({
+      participants: [creatorId, participantId],
+      chatType,
+      isActive: true
     });
 
-    setTimeout(() => pendingMatches.delete(chatId.toString()), 120000);
-    
+    const populatedChat = await Chat.populate(newChat, {
+      path: 'participants',
+      select: 'firstName lastName username avatar'
+    });
+
+    // Update users
+    await User.updateMany(
+      { _id: { $in: [creatorId, participantId] } },
+      { 
+        $addToSet: { activeChats: populatedChat._id },
+        chatStatus: 'in_chat'
+      }
+    );
+
+    // Commit transaction
     await session.commitTransaction();
-    return { success: true, chatId: chatId.toString() };
+
+    return {
+      success: true,
+      data: populatedChat,
+      message: 'New chat created successfully'
+    };
+
   } catch (error) {
     await session.abortTransaction();
-    return { success: false, error: error.message };
+    return { 
+      success: false, 
+      error: error.message 
+    };
   } finally {
     session.endSession();
   }
@@ -126,51 +153,55 @@ const handleMessage = async (io, { chatId, senderId, content }) => {
   session.startTransaction();
 
   try {
-    const chat = await Chat.findById(chatId).session(session);
-    if (!chat?.isActive) throw new Error('Chat is not active');
+    // Validate inputs
+    if (!mongoose.Types.ObjectId.isValid(chatId) || 
+        !mongoose.Types.ObjectId.isValid(senderId)) {
+      throw new Error('Invalid ID format');
+    }
 
-    const [message] = await Message.create([{
+    // Create and populate message
+    const message = await Message.create({
       chat: chatId,
       sender: senderId,
-      content,
-      readBy: [senderId]
-    }], { session });
-
-    const receiverId = chat.participants.find(id => !id.equals(senderId));
-    
-    await Chat.findByIdAndUpdate(
-      chatId,
-      {
-        lastMessage: message._id,
-        $inc: { unreadCount: 1 }
-      },
-      { session, new: true }
-    );
+      content
+    });
 
     const populatedMessage = await Message.populate(message, {
       path: 'sender',
-      select: 'firstName lastName username'
+      select: 'firstName lastName username avatar'
     });
 
-    // Emit message to chat room
-    io.to(chatId).emit('new-message', {
+    // Update chat
+    await Chat.findByIdAndUpdate(
       chatId,
-      message: populatedMessage
-    });
+      {
+        lastMessage: populatedMessage._id,
+        $inc: { unreadCount: 1 },
+        updatedAt: new Date()
+      }
+    );
+
+    // Emit message
+    io.to(chatId.toString()).emit('new-message', populatedMessage);
 
     await session.commitTransaction();
     return {
       success: true,
-      message: populatedMessage,
-      receiverId
+      data: populatedMessage,
+      message: 'Message sent successfully'
     };
+
   } catch (error) {
     await session.abortTransaction();
-    return { success: false, error: error.message };
+    return { 
+      success: false, 
+      error: error.message 
+    };
   } finally {
     session.endSession();
   }
 };
+
 
 // ==================== Core Chat Functions ====================
 const getChats = async (req, res) => {
