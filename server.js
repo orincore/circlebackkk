@@ -22,6 +22,8 @@ const io = new Server(httpServer, {
   }
 });
 
+app.set('io', io);
+
 // Database connection
 connectDB();
 
