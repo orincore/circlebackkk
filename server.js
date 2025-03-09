@@ -9,6 +9,9 @@ const User = require('./models/userModel');
 const Chat = require('./models/chatModel');
 const Message = require('./models/messageModel'); // Ensure this model exists
 
+// Import handleReadAll from chatController (and any other needed functions if desired)
+const { handleReadAll } = require('./controllers/chatController');
+
 dotenv.config();
 
 // Initialize application
@@ -185,6 +188,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('read-all', async ({ chatId, userId }) => {
+    // Now handleReadAll is defined (imported from chatController)
     await handleReadAll(io, { chatId, userId });
   });
 
