@@ -15,7 +15,11 @@ const {
   archiveChat,
   addReaction,
   handleBlockUser,
-  handleTypingIndicator
+  handleTypingIndicator,
+  unarchiveChat,
+  unblockUser,
+  stopTypingIndicator,
+  handleReadAll
 } = require('../controllers/chatController');
 const { protect } = require('../middleware/authMiddleware');
 const Chat = require('../models/chatModel');
@@ -71,7 +75,6 @@ router.post('/:chatId/messages', async (req, res) => {
     });
   }
 });
-
 
 router.put('/messages/:messageId', editMessage);
 router.delete('/messages/:messageId', deleteMessage);
@@ -138,6 +141,41 @@ router.post('/create-session', async (req, res) => {
   }
 });
 
+// ==================== Additional Feature Routes ====================
+
+// Unarchive chat route
+router.put('/:chatId/unarchive', unarchiveChat);
+
+// Unblock user route
+router.post('/unblock/:userId', unblockUser);
+
+// Stop typing indicator route (optional)
+router.post('/:chatId/stop-typing', (req, res) => {
+  try {
+    const io = req.app.get('io');
+    const { chatId } = req.params;
+    const userId = req.user._id;
+    stopTypingIndicator(io, chatId, userId);
+    res.status(200).json({ success: true, message: "Stopped typing" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Read all messages route (optional)
+router.post('/:chatId/read-all', async (req, res) => {
+  try {
+    const io = req.app.get('io');
+    const { chatId } = req.params;
+    const userId = req.user._id;
+    const result = await handleReadAll(io, { chatId, userId });
+    result.success
+      ? res.status(200).json(result)
+      : res.status(400).json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // ==================== User Interaction Routes ====================
 router.post('/block/:userId', handleBlockUser);
