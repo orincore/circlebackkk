@@ -534,6 +534,75 @@ addReaction: async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+},
+
+handleReadAll: async (io, { chatId, userId }) => {
+  try {
+    // Find messages in the chat that were not sent by the current user and not yet marked as read
+    const messages = await Message.find({
+      chat: chatId,
+      sender: { $ne: userId },
+      read: { $ne: true }
+    });
+    const messageIds = messages.map(msg => msg._id.toString());
+
+    // Mark those messages as read
+    await Message.updateMany(
+      { chat: chatId, sender: { $ne: userId }, read: { $ne: true } },
+      { $set: { read: true } }
+    );
+
+    // Emit an event so that clients in the chat room update read receipts
+    io.to(chatId.toString()).emit("read-all", { chatId, messageIds });
+    return { success: true, message: "Messages marked as read" };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+},
+
+// Emit a "stop-typing" event so that clients know the user has stopped typing
+stopTypingIndicator: (io, chatId, userId) => {
+  try {
+    io.to(chatId.toString()).emit("stop-typing", { chatId, userId });
+    return { success: true, message: "Typing indicator stopped" };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+},
+
+// Unarchive a chat: set its archived flag to false
+unarchiveChat: async (req, res) => {
+  try {
+    const chat = await Chat.findOneAndUpdate(
+      { _id: req.params.chatId, participants: req.user._id },
+      { isArchived: false },
+      { new: true }
+    ).populate('participants', 'username avatar');
+    if (!chat) {
+      return res.status(404).json({ success: false, message: 'Chat not found' });
+    }
+    res.status(200).json({ success: true, data: chat, message: "Chat unarchived" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+},
+
+// Unblock a user: remove the block record for the current user blocking another user
+unblockUser: async (req, res) => {
+  try {
+    const { userId: unblockUserId } = req.params;
+    // Remove the block record from the Block model (assumes Block model exists)
+    const result = await Block.findOneAndDelete({
+      blocker: req.user._id,
+      blocked: unblockUserId
+    });
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Block record not found' });
+    }
+    res.status(200).json({ success: true, message: "User unblocked successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 }
 };
-
+// Mark all unread messages in a chat (sent by the partner) as read and emit a read receipt event
