@@ -1,7 +1,7 @@
+const mongoose = require('mongoose');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const { connectDB } = require('./config/db');
