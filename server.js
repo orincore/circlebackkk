@@ -9,7 +9,7 @@ const User = require('./models/userModel');
 const Chat = require('./models/chatModel');
 const Message = require('./models/messageModel'); // Ensure this model exists
 
-// Import handleReadAll from chatController (and any other needed functions if desired)
+// Import handleReadAll from chatController (assumed to broadcast the read-all event)
 const { handleReadAll } = require('./controllers/chatController');
 
 dotenv.config();
@@ -42,7 +42,7 @@ const pendingMatches = new Map();
 
 // ==================== WebSocket Handlers ====================
 io.on('connection', (socket) => {
-  console.log(`\n[CONNECTION] New connection: ${socket.id}`);
+  console.log(`[CONNECTION] New connection: ${socket.id}`);
 
   // Join a chat room
   socket.on('join-chat', (chatId) => {
@@ -169,6 +169,7 @@ io.on('connection', (socket) => {
         throw new Error('Chat not found');
       }
       console.log(`[MESSAGE BROADCAST] To chat ${chatId}`);
+      // Emit the new message to everyone in the room
       io.to(chatId).emit('new-message', populatedMessage);
     } catch (error) {
       console.error('[MESSAGE ERROR]', error);
@@ -178,7 +179,7 @@ io.on('connection', (socket) => {
 
   // Additional socket events for typing and read receipts
   socket.on('typing', ({ chatId, userId }) => {
-    // Forward typing event to everyone else in the room
+    // Broadcast the typing event to everyone else in the room
     socket.to(chatId).emit('typing', { chatId, userId });
   });
 
@@ -188,7 +189,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('read-all', async ({ chatId, userId }) => {
-    // Now handleReadAll is defined (imported from chatController)
+    // Assuming handleReadAll updates message statuses and then broadcasts the read-all event to the room.
     await handleReadAll(io, { chatId, userId });
   });
 
@@ -376,12 +377,8 @@ const handleMatchResult = (result, chatId) => {
     console.log(`[HANDLE MATCH RESULT] For chat ${chatId}, Success: ${result.success}`);
     if (result.success && result.chat) {
       console.log(`[MATCH CONFIRMED] Chat ${chatId}`);
-      result.chat.participants.forEach(userId => {
-        const userData = activeUsers.get(userId);
-        if (userData) {
-          io.to(userData.socketId).emit('join-chat-room', chatId);
-        }
-      });
+      // Emit match-confirmed to everyone in the chat room.
+      // The client will then call "join-chat" to actually join the room.
       io.to(chatId).emit('match-confirmed', {
         chatId,
         participants: result.chat.participants
@@ -420,5 +417,5 @@ app.get('/', (req, res) => res.send('Chat Service API'));
 // Start server
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
-  console.log(`\n[SERVER] Running on port ${PORT}`);
+  console.log(`[SERVER] Running on port ${PORT}`);
 });
